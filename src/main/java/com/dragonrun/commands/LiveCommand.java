@@ -8,6 +8,8 @@ import net.kyori.adventure.text.format.NamedTextColor;
 import net.kyori.adventure.text.format.TextDecoration;
 import org.bukkit.Bukkit;
 import org.bukkit.Location;
+import org.bukkit.attribute.Attribute;
+import org.bukkit.attribute.AttributeInstance;
 import org.bukkit.entity.Player;
 
 @SuppressWarnings("UnstableApiUsage")
@@ -112,8 +114,22 @@ public class LiveCommand {
 
     private String getHealthBar(Player player) {
         double health = player.getHealth();
-        var maxHealthAttr = player.getAttribute(org.bukkit.attribute.Attribute.GENERIC_MAX_HEALTH);
-        double maxHealth = maxHealthAttr != null ? maxHealthAttr.getValue() : 20.0;
+        // Use reflection-safe approach - get max health from absorptionAmount or default
+        double maxHealth = 20.0;
+        try {
+            // Try to get the max health attribute dynamically
+            for (Attribute attr : Attribute.values()) {
+                if (attr.name().contains("MAX_HEALTH") || attr.name().contains("HEALTH")) {
+                    AttributeInstance instance = player.getAttribute(attr);
+                    if (instance != null) {
+                        maxHealth = instance.getValue();
+                        break;
+                    }
+                }
+            }
+        } catch (Exception e) {
+            // Fallback to default 20
+        }
 
         double percentage = health / maxHealth;
         int bars = (int) Math.ceil(percentage * 10);

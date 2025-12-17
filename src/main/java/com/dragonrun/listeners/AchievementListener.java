@@ -123,9 +123,8 @@ public class AchievementListener implements Listener {
                 achievementManager.award(uuid, "speedrunner");
             }
 
-            // Check if player took no damage (simplified check)
-            var maxHealthAttr = killer.getAttribute(org.bukkit.attribute.Attribute.GENERIC_MAX_HEALTH);
-            if (maxHealthAttr != null && killer.getHealth() == maxHealthAttr.getValue()) {
+            // Check if player took no damage (simplified check - at full health)
+            if (killer.getHealth() >= 20.0) {
                 achievementManager.award(uuid, "no_hit");
             }
         }
