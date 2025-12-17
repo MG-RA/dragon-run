@@ -24,5 +24,11 @@ permissions:
   dragonrun.stats:
     description: View stats
     default: true
+  dragonrun.live:
+    description: View live player tracker
+    default: true
+  dragonrun.achievements:
+    description: View achievements
+    default: true
 
 # Commands are registered programmatically using Paper's Brigadier API

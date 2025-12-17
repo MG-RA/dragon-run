@@ -1018,28 +1018,30 @@ WEBSOCKET_URL = "ws://your-server:8585/events"
 
 ## Development Phases
 
-### Phase 1: Core Plugin (MVP)
-1. Set up Gradle project with paperweight-userdev
-2. Basic plugin structure with Paper API
-3. Database connection and schema setup
-4. Death detection and world reset trigger
-5. Basic aura system (add/remove/check)
-6. Reset script with Aikar's flags
-7. Test full reset cycle
+### Phase 1: Core Plugin (MVP) ✅ COMPLETE
+1. ✅ Set up Gradle project with paperweight-userdev
+2. ✅ Basic plugin structure with Paper API
+3. ✅ Database connection and schema setup (PostgreSQL + HikariCP)
+4. ✅ Death detection and world reset trigger
+5. ✅ Basic aura system (add/remove/check)
+6. ✅ Reset script with Aikar's flags (Windows .bat)
+7. ✅ Test full reset cycle
 
-### Phase 2: Achievements & Shop
-1. Achievement manager with all achievements
-2. Achievement detection listeners (use Paper's extended events)
-3. Shop system with Adventure API GUI
-4. Starter items given on join
-5. Permanent perks system
-6. Title system with Adventure components
+### Phase 2: Achievements & Dashboard ✅ COMPLETE
+1. ✅ Achievement manager with 40+ achievements
+2. ✅ Achievement detection listeners (combat, death, progression)
+3. ✅ /achievements command to view earned achievements
+4. ✅ /stats command with formatted dashboard
+5. ✅ In-game scoreboard (sidebar) with run info and player stats
+6. ✅ Tab list showing players with aura values
 
-### Phase 3: Betting System
-1. Betting manager
-2. Bet placement and validation
-3. Bet resolution on events
-4. Bet history tracking
+### Phase 3: Betting & Live Tracking ✅ COMPLETE
+1. ✅ BettingManager for placing and tracking bets
+2. ✅ /bet <player> <amount> command for placing bets
+3. ✅ /bet command to view active bets
+4. ✅ /live command for real-time player locations and stats
+5. ✅ Bet resolution on player death (lost bets)
+6. ✅ Bet persistence in database
 
 ### Phase 4: API & WebSocket
 1. REST API endpoints (embedded Javalin or separate service)
@@ -1056,7 +1058,7 @@ WEBSOCKET_URL = "ws://your-server:8585/events"
 6. Account linking
 
 ### Phase 6: Polish
-1. Scoreboards with Adventure API
+1. ✅ Scoreboards with Adventure API
 2. Boss bars for dragon health
 3. Leaderboards
 4. Run history detailed view
