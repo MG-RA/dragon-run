@@ -1,0 +1,42 @@
+# Dragon Run Configuration
+
+# Database connection settings
+database:
+  host: localhost
+  port: 5432
+  name: dragonrun
+  user: postgres
+  password: root
+  pool:
+    maximum-size: 10
+    minimum-idle: 2
+    connection-timeout: 30000
+    idle-timeout: 600000
+    max-lifetime: 1800000
+
+# Game settings
+game:
+  # Delay before world reset after death (seconds)
+  reset-delay-seconds: 10
+  # Starting aura for new players
+  starting-aura: 100
+  # Minimum bet amount
+  min-bet: 10
+  # Bet payout multiplier
+  bet-multiplier: 2.0
+
+# Death message settings
+death-messages:
+  enabled: true
+  # Enable roast messages on death
+  roasts: true
+
+# Achievement announcements
+achievements:
+  broadcast-positive: true
+  broadcast-negative: true
+  # Minimum aura change to broadcast
+  min-broadcast-aura: 50
+
+# Position broadcast interval (ticks, 20 = 1 second)
+position-broadcast-interval: 10

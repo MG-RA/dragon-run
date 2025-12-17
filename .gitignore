@@ -1,0 +1,42 @@
+# Gradle
+.gradle/
+build/
+!gradle/wrapper/gradle-wrapper.jar
+
+# IDE
+.idea/
+.vscode/
+*.iml
+*.ipr
+*.iws
+
+# Paper
+.paperweight/
+run/
+
+# Test server
+testserver/world/
+testserver/world_nether/
+testserver/world_the_end/
+testserver/logs/
+testserver/cache/
+testserver/libraries/
+testserver/versions/
+testserver/*.jar
+testserver/plugins/*.jar
+!testserver/plugins/.gitkeep
+testserver/RESET_TRIGGER
+testserver/eula.txt
+testserver/server.properties
+testserver/usercache.json
+testserver/banned-players.json
+testserver/banned-ips.json
+testserver/ops.json
+testserver/whitelist.json
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log

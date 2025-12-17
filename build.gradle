@@ -1,0 +1,52 @@
+plugins {
+    id 'java'
+    id 'io.papermc.paperweight.userdev' version '1.7.7'
+    id 'com.gradleup.shadow' version '8.3.5'
+}
+
+group = 'com.dragonrun'
+version = '1.0.0-SNAPSHOT'
+
+java {
+    toolchain.languageVersion = JavaLanguageVersion.of(21)
+}
+
+repositories {
+    mavenCentral()
+    maven { url = 'https://repo.papermc.io/repository/maven-public/' }
+}
+
+dependencies {
+    paperweight.paperDevBundle('1.21-R0.1-SNAPSHOT')
+
+    // Database
+    implementation 'com.zaxxer:HikariCP:5.1.0'
+    implementation 'org.postgresql:postgresql:42.7.3'
+
+    // JSON
+    implementation 'com.google.code.gson:gson:2.10.1'
+
+    // WebSocket (for future phases)
+    implementation 'org.java-websocket:Java-WebSocket:1.5.6'
+}
+
+tasks.named('assemble') {
+    dependsOn tasks.named('reobfJar')
+}
+
+tasks.named('shadowJar') {
+    archiveClassifier.set('')
+    // Relocate to avoid conflicts with other plugins
+    // Note: Don't relocate postgresql as it breaks JDBC driver loading
+    relocate 'com.zaxxer.hikari', 'com.dragonrun.libs.hikari'
+    relocate 'org.java_websocket', 'com.dragonrun.libs.websocket'
+}
+
+tasks.named('processResources') {
+    def props = [version: version]
+    inputs.properties props
+    filteringCharset = 'UTF-8'
+    filesMatching('paper-plugin.yml') {
+        expand props
+    }
+}
