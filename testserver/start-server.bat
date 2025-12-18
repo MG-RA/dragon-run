@@ -26,9 +26,9 @@ echo ============================================
 echo.
 echo Server stays alive between runs.
 echo Players vote to start runs with /vote
+echo Press Ctrl+C to stop the server.
 echo.
 
-:start
 echo [DragonRun] Starting PaperMC server...
 echo [DragonRun] %date% %time%
 echo.
@@ -47,6 +47,5 @@ for %%d in (world world_nether world_the_end) do (
     )
 )
 
-echo [DragonRun] Restarting in 5 seconds... ^(Ctrl+C to cancel^)
-timeout /t 5 /nobreak > nul
-goto start
+echo [DragonRun] Cleanup complete. Server has stopped.
+pause
