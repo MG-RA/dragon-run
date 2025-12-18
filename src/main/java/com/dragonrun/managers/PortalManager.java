@@ -111,26 +111,34 @@ public class PortalManager {
 
     /**
      * Find safe Y coordinate for portal placement.
+     * Prioritizes natural caves/air pockets over creating enclosed rooms.
      */
     private static int findSafePortalY(World world, int x, int z) {
         if (world.getEnvironment() == World.Environment.NETHER) {
-            // In nether, prefer Y=70-120 (natural cave height), then search lower
-            // Search from top down to find caves/open spaces
-            for (int y = 120; y >= 70; y--) {
+            // First pass: Look for natural caves (air spaces) in Y=70-110
+            // Avoid Y=111-128 (too close to nether roof)
+            for (int y = 110; y >= 70; y--) {
+                if (isNaturalCave(world, x, y, z) && isSafeForPortal(world, x, y, z)) {
+                    return y;
+                }
+            }
+
+            // Second pass: If no cave found, look for any safe spot Y=70-100
+            for (int y = 100; y >= 70; y--) {
                 if (isSafeForPortal(world, x, y, z)) {
                     return y;
                 }
             }
 
-            // If no good spot found in preferred range, search lower (avoid lava ocean at Y=31)
-            for (int y = 69; y >= 35; y--) {
+            // Third pass: Search lower range Y=40-69 (above lava ocean at Y=31)
+            for (int y = 69; y >= 40; y--) {
                 if (isSafeForPortal(world, x, y, z)) {
                     return y;
                 }
             }
 
-            // Last resort: create platform above lava ocean
-            return 96; // Fallback to safe height
+            // Last resort: create platform at safe height
+            return 80; // Middle safe height, not too high or low
         } else {
             // In overworld, use surface or find cave
             int surfaceY = world.getHighestBlockYAt(x, z);
@@ -150,6 +158,31 @@ public class PortalManager {
 
             return surfaceY; // Fallback to surface
         }
+    }
+
+    /**
+     * Check if location has natural air cavities (cave).
+     * A natural cave has significant air space around it.
+     */
+    private static boolean isNaturalCave(World world, int x, int y, int z) {
+        int airBlocks = 0;
+        int totalBlocks = 0;
+
+        // Check 7x7x7 area around portal location
+        for (int dx = -3; dx <= 3; dx++) {
+            for (int dy = -1; dy <= 5; dy++) {
+                for (int dz = -3; dz <= 3; dz++) {
+                    Block block = world.getBlockAt(x + dx, y + dy, z + dz);
+                    totalBlocks++;
+                    if (!block.getType().isSolid()) {
+                        airBlocks++;
+                    }
+                }
+            }
+        }
+
+        // Consider it a cave if >40% of blocks are air
+        return (airBlocks * 100.0 / totalBlocks) > 40.0;
     }
 
     /**
