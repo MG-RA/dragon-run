@@ -1,11 +1,13 @@
 # Gradle
 .gradle/
 build/
+bin/
 !gradle/wrapper/gradle-wrapper.jar
 
 # IDE
 .idea/
 .vscode/
+.claude/
 *.iml
 *.ipr
 *.iws
@@ -14,25 +16,22 @@ build/
 .paperweight/
 run/
 
-# Test server
-testserver/world/
-testserver/world_nether/
-testserver/world_the_end/
-testserver/logs/
-testserver/cache/
-testserver/libraries/
-testserver/versions/
-testserver/*.jar
-testserver/plugins/*.jar
-!testserver/plugins/.gitkeep
-testserver/RESET_TRIGGER
-testserver/eula.txt
-testserver/server.properties
-testserver/usercache.json
-testserver/banned-players.json
-testserver/banned-ips.json
-testserver/ops.json
-testserver/whitelist.json
+# Test server - exclude everything except config files
+testserver/
+!testserver/bukkit.yml
+!testserver/start-server.bat
+!testserver/plugins/
+testserver/plugins/*
+!testserver/plugins/DragonRun/
+testserver/plugins/DragonRun/*
+!testserver/plugins/DragonRun/config.yml
+
+# JARs
+*.jar
+!gradle/wrapper/gradle-wrapper.jar
+
+# Compiled class files
+*.class
 
 # OS
 .DS_Store
@@ -40,3 +39,12 @@ Thumbs.db
 
 # Logs
 *.log
+
+# Temp files
+*.tmp
+*.swp
+*~
+test-*.txt
+
+# Director AI workspace
+director/
