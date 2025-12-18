@@ -2,9 +2,8 @@
 setlocal enabledelayedexpansion
 
 :: Dragon Run Server Start Script for Windows
-:: This script manages the server lifecycle and world resets
+:: Director's Cut - Server stays alive, manages worlds internally
 
-set WORLD_DIRS=world world_nether world_the_end
 set SERVER_JAR=paper-1.21.jar
 set JAVA_OPTS=-Xmx6G -Xms2G -XX:+UseG1GC -XX:+ParallelRefProcEnabled -XX:MaxGCPauseMillis=200
 
@@ -18,8 +17,11 @@ set PAPER_FLAGS=%PAPER_FLAGS% -XX:SurvivorRatio=32 -XX:+PerfDisableSharedMem -XX
 set PAPER_FLAGS=%PAPER_FLAGS% -Dusing.aikars.flags=https://mcflags.emc.gs -Daikars.new.flags=true
 
 echo ============================================
-echo        DRAGON RUN SERVER MANAGER
+echo     DRAGON RUN - DIRECTOR'S CUT
 echo ============================================
+echo.
+echo Server stays alive between runs.
+echo Players vote to start runs with /vote
 echo.
 
 :start
@@ -31,41 +33,16 @@ java %JAVA_OPTS% %PAPER_FLAGS% -jar %SERVER_JAR% --nogui
 
 echo.
 echo [DragonRun] Server stopped.
+echo.
 
-if exist "RESET_TRIGGER" (
-    echo.
-    echo ============================================
-    echo          WORLD RESET TRIGGERED
-    echo ============================================
-    echo.
-
-    :: Display trigger info
-    echo [DragonRun] Reset caused by:
-    type RESET_TRIGGER
-    echo.
-
-    :: Delete world folders
-    for %%d in (%WORLD_DIRS%) do (
-        if exist "%%d" (
-            rmdir /s /q "%%d"
-            echo [DragonRun] Deleted %%d
-        )
+:: Clean up any leftover hardcore worlds (they start with hardcore_run_)
+for /d %%d in (hardcore_run_*) do (
+    if exist "%%d" (
+        rmdir /s /q "%%d"
+        echo [DragonRun] Cleaned up leftover world: %%d
     )
-
-    :: Remove trigger file
-    del RESET_TRIGGER
-
-    echo.
-    echo [DragonRun] World reset complete!
-    echo [DragonRun] Restarting server in 5 seconds...
-    echo.
-    timeout /t 5 /nobreak > nul
-) else (
-    echo.
-    echo [DragonRun] Server stopped without reset trigger.
-    echo [DragonRun] Restarting in 10 seconds... ^(Ctrl+C to cancel^)
-    echo.
-    timeout /t 10 /nobreak > nul
 )
 
+echo [DragonRun] Restarting in 5 seconds... ^(Ctrl+C to cancel^)
+timeout /t 5 /nobreak > nul
 goto start

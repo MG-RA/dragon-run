@@ -95,6 +95,32 @@ public class Database {
         } catch (Exception e) {
             plugin.getLogger().severe("Failed to initialize schema: " + e.getMessage());
         }
+
+        // Run migrations
+        runMigrations();
+    }
+
+    private void runMigrations() {
+        // Migration 001: Add world columns
+        try (InputStream is = plugin.getResource("migrations/001_add_world_columns.sql")) {
+            if (is == null) {
+                plugin.getLogger().warning("Migration 001 not found, skipping");
+                return;
+            }
+            String migration = new String(is.readAllBytes(), StandardCharsets.UTF_8);
+            try (Connection conn = getConnection();
+                 Statement stmt = conn.createStatement()) {
+                for (String sql : migration.split(";")) {
+                    String trimmed = sql.trim();
+                    if (!trimmed.isEmpty()) {
+                        stmt.execute(trimmed);
+                    }
+                }
+                plugin.getLogger().info("Database migration 001 applied successfully.");
+            }
+        } catch (Exception e) {
+            plugin.getLogger().warning("Migration 001 failed (may already be applied): " + e.getMessage());
+        }
     }
 
     public void close() {

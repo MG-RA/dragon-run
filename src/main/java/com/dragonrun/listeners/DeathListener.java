@@ -1,6 +1,7 @@
 package com.dragonrun.listeners;
 
 import com.dragonrun.DragonRunPlugin;
+import com.dragonrun.managers.GameState;
 import com.dragonrun.util.MessageUtil;
 import net.kyori.adventure.text.Component;
 import net.kyori.adventure.title.Title;
@@ -12,9 +13,6 @@ import org.bukkit.event.Listener;
 import org.bukkit.event.entity.EntityDamageEvent;
 import org.bukkit.event.entity.PlayerDeathEvent;
 
-import java.io.File;
-import java.io.FileWriter;
-import java.io.IOException;
 import java.time.Duration;
 import java.util.List;
 import java.util.Random;
@@ -75,6 +73,18 @@ public class DeathListener implements Listener {
         UUID uuid = player.getUniqueId();
         String playerName = player.getName();
 
+        // Ignore deaths in lobby world - only process hardcore deaths
+        if (plugin.getWorldManager().isLobbyWorld(player.getWorld())) {
+            event.deathMessage(null);
+            return;
+        }
+
+        // Ignore deaths if run is not active
+        if (plugin.getRunManager().getGameState() != GameState.ACTIVE) {
+            event.deathMessage(null);
+            return;
+        }
+
         // 1. Get death cause and roast
         String deathCause = getDeathCause(event);
         String roast = getRoast(deathCause);
@@ -96,20 +106,24 @@ public class DeathListener implements Listener {
         // 6. Process bets (all bets on deceased are lost, deceased bets are cleared)
         plugin.getBettingManager().processDeath(uuid);
 
-        // 7. End the run
+        // 7. End the run (handles teleport to lobby and world cleanup)
         plugin.getRunManager().endRunByDeath(uuid);
 
-        // 8. Start reset countdown
-        startResetCountdown(playerName, deathCause);
+        // 8. Show reset countdown (visual only - RunManager handles actual reset)
+        showResetCountdown(playerName);
     }
 
-    private void startResetCountdown(String playerName, String deathCause) {
+    /**
+     * Show visual reset countdown to all players.
+     * The actual reset is handled by RunManager.endRunByDeath().
+     */
+    private void showResetCountdown(String playerName) {
         int delaySeconds = plugin.getConfig().getInt("game.reset-delay-seconds", 10);
 
         // Show title to all players
         Title resetTitle = Title.title(
-                Component.text("WORLD RESETTING", MessageUtil.RESET_COLOR),
-                Component.text(playerName + " got cooked", MessageUtil.SUBTITLE_COLOR),
+                Component.text("RUN ENDED", MessageUtil.RESET_COLOR),
+                Component.text(playerName + " got cooked - returning to lobby", MessageUtil.SUBTITLE_COLOR),
                 Title.Times.times(
                         Duration.ZERO,
                         Duration.ofSeconds(delaySeconds),
@@ -129,11 +143,6 @@ public class DeathListener implements Listener {
                 broadcastCountdown(countdownStart);
             }, delayUntilCountdown, TimeUnit.MILLISECONDS);
         }
-
-        // Final reset trigger
-        Bukkit.getAsyncScheduler().runDelayed(plugin, task -> {
-            triggerWorldReset(playerName, deathCause);
-        }, delaySeconds * 1000L, TimeUnit.MILLISECONDS);
     }
 
     private void broadcastCountdown(int secondsRemaining) {
@@ -146,32 +155,6 @@ public class DeathListener implements Listener {
                 broadcastCountdown(secondsRemaining - 1);
             }, 1, TimeUnit.SECONDS);
         }
-    }
-
-    private void triggerWorldReset(String playerName, String deathCause) {
-        // 1. Write reset trigger file for external script
-        // The file goes in the server root (parent of plugins folder)
-        File serverRoot = plugin.getDataFolder().getParentFile().getParentFile();
-        File triggerFile = new File(serverRoot, "RESET_TRIGGER");
-        try (FileWriter writer = new FileWriter(triggerFile)) {
-            writer.write(playerName + "|" + deathCause + "|" + System.currentTimeMillis());
-            plugin.getLogger().info("Reset trigger file written to: " + triggerFile.getAbsolutePath());
-        } catch (IOException e) {
-            plugin.getLogger().severe("Failed to write reset trigger: " + e.getMessage());
-        }
-
-        // 2. Kick all players
-        Component kickMessage = MessageUtil.kickMessage(playerName);
-        Bukkit.getGlobalRegionScheduler().run(plugin, task -> {
-            for (Player p : Bukkit.getOnlinePlayers()) {
-                p.kick(kickMessage);
-            }
-
-            // 3. Shutdown server after a brief delay to ensure kicks complete
-            Bukkit.getAsyncScheduler().runDelayed(plugin, shutdownTask -> {
-                Bukkit.shutdown();
-            }, 500, TimeUnit.MILLISECONDS);
-        });
     }
 
     private String getDeathCause(PlayerDeathEvent event) {

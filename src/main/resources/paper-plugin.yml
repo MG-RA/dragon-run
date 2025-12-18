@@ -6,11 +6,14 @@ description: Hardcore roguelike - kill the dragon or die trying
 author: DragonRunDev
 website: https://github.com/dragonrun/dragon-run
 
-load: STARTUP
+load: POSTWORLD
 
 permissions:
   dragonrun.admin:
     description: Admin commands
+    default: op
+  dragonrun.admin.forcestart:
+    description: Force start a run
     default: op
   dragonrun.aura:
     description: Check aura
@@ -29,6 +32,9 @@ permissions:
     default: true
   dragonrun.achievements:
     description: View achievements
+    default: true
+  dragonrun.vote:
+    description: Vote to start runs
     default: true
 
 # Commands are registered programmatically using Paper's Brigadier API

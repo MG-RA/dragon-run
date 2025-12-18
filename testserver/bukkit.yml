@@ -11,6 +11,7 @@
 
 settings:
   allow-end: true
+  allow-nether: true
   warn-on-overload: true
   permissions-file: permissions.yml
   update-folder: update
@@ -41,3 +42,8 @@ ticks-per:
   ambient-spawns: 1
   autosave: 6000
 aliases: now-in-commands.yml
+
+# World-specific settings
+worlds:
+  world_lobby:
+    generator: '' # Flat world for lobby

@@ -42,6 +42,8 @@ CREATE TABLE IF NOT EXISTS run_history (
     outcome VARCHAR(20),
     ended_by_uuid VARCHAR(36),
     dragon_killer_uuid VARCHAR(36),
+    world_name VARCHAR(100),
+    world_seed BIGINT,
     peak_players INT DEFAULT 0,
     total_deaths INT DEFAULT 0
 );

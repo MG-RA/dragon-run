@@ -16,7 +16,7 @@ database:
 
 # Game settings
 game:
-  # Delay before world reset after death (seconds)
+  # Delay before returning to lobby after death (seconds)
   reset-delay-seconds: 10
   # Starting aura for new players
   starting-aura: 100
@@ -24,6 +24,27 @@ game:
   min-bet: 10
   # Bet payout multiplier
   bet-multiplier: 2.0
+
+# World settings
+worlds:
+  # Lobby world name (persistent flat world)
+  lobby: world_lobby
+  # Hardcore world name (fixed name "world" for proper nether/end support)
+  hardcore: world
+  # World border size for hardcore worlds
+  world-border-size: 30000
+
+# Vote settings
+vote:
+  # Require majority vote to start run
+  majority-required: true
+  # Minimum players to start a run
+  min-players: 1
+
+# Spectator settings (for mid-run joiners)
+spectator:
+  # Allow spectating active runs
+  enabled: true
 
 # Death message settings
 death-messages:
@@ -40,3 +61,12 @@ achievements:
 
 # Position broadcast interval (ticks, 20 = 1 second)
 position-broadcast-interval: 10
+
+# Director AI WebSocket settings
+director:
+  # Enable Director AI WebSocket server
+  enabled: true
+  # WebSocket server port
+  port: 8765
+  # State broadcast interval (ticks, 20 = 1 second)
+  broadcast-interval: 20

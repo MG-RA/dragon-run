@@ -1,8 +1,7 @@
 #!/bin/bash
 # Dragon Run Server Start Script
-# This script manages the server lifecycle and world resets
+# Director's Cut - Server stays alive, manages worlds internally
 
-WORLD_DIRS="world world_nether world_the_end"
 SERVER_JAR="paper-1.21.jar"
 JAVA_OPTS="-Xmx6G -Xms2G -XX:+UseG1GC -XX:+ParallelRefProcEnabled -XX:MaxGCPauseMillis=200"
 
@@ -16,8 +15,11 @@ PAPER_FLAGS="$PAPER_FLAGS -XX:SurvivorRatio=32 -XX:+PerfDisableSharedMem -XX:Max
 PAPER_FLAGS="$PAPER_FLAGS -Dusing.aikars.flags=https://mcflags.emc.gs -Daikars.new.flags=true"
 
 echo "============================================"
-echo "       DRAGON RUN SERVER MANAGER"
+echo "    DRAGON RUN - DIRECTOR'S CUT"
 echo "============================================"
+echo ""
+echo "Server stays alive between runs."
+echo "Players vote to start runs with /vote"
 echo ""
 
 while true; do
@@ -30,40 +32,16 @@ while true; do
     EXIT_CODE=$?
     echo ""
     echo "[DragonRun] Server stopped with exit code: $EXIT_CODE"
+    echo ""
 
-    if [ -f "RESET_TRIGGER" ]; then
-        echo ""
-        echo "============================================"
-        echo "         WORLD RESET TRIGGERED"
-        echo "============================================"
-        echo ""
+    # Clean up any leftover hardcore worlds
+    for dir in hardcore_run_*; do
+        if [ -d "$dir" ]; then
+            rm -rf "$dir"
+            echo "[DragonRun] Cleaned up leftover world: $dir"
+        fi
+    done
 
-        # Read and display trigger info
-        RESET_INFO=$(cat RESET_TRIGGER)
-        echo "[DragonRun] Reset caused by: $RESET_INFO"
-        echo ""
-
-        # Delete world folders
-        for dir in $WORLD_DIRS; do
-            if [ -d "$dir" ]; then
-                rm -rf "$dir"
-                echo "[DragonRun] Deleted $dir"
-            fi
-        done
-
-        # Remove trigger file
-        rm RESET_TRIGGER
-
-        echo ""
-        echo "[DragonRun] World reset complete!"
-        echo "[DragonRun] Restarting server in 5 seconds..."
-        echo ""
-        sleep 5
-    else
-        echo ""
-        echo "[DragonRun] Server stopped without reset trigger."
-        echo "[DragonRun] Restarting in 10 seconds... (Ctrl+C to cancel)"
-        echo ""
-        sleep 10
-    fi
+    echo "[DragonRun] Restarting in 5 seconds... (Ctrl+C to cancel)"
+    sleep 5
 done

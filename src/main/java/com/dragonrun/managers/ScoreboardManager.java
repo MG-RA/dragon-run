@@ -52,8 +52,7 @@ public class ScoreboardManager {
 
         UUID uuid = player.getUniqueId();
         int aura = plugin.getAuraManager().getAura(uuid);
-        int runId = plugin.getRunManager().getCurrentRunId();
-        long runDuration = plugin.getRunManager().getRunDurationSeconds();
+        GameState state = plugin.getRunManager().getGameState();
         int achievements = plugin.getAchievementManager().getPlayerAchievements(uuid).size();
         int totalAchievements = plugin.getAchievementManager().getAllAchievements().size();
 
@@ -62,13 +61,40 @@ public class ScoreboardManager {
         // Blank line
         setScore(objective, " ", line--);
 
-        // Run info
-        setScore(objective, "§b§lRun #" + runId, line--);
-        setScore(objective, "§7Duration: §f" + TimeUtil.formatDuration(runDuration), line--);
-        setScore(objective, "§7Players: §a" + Bukkit.getOnlinePlayers().size(), line--);
+        // Show different info based on game state
+        if (state == GameState.IDLE) {
+            // Lobby - show vote info
+            int votes = plugin.getVoteManager().getVoteCount();
+            int required = plugin.getVoteManager().getRequiredVotes();
+            int lobbyPlayers = plugin.getWorldManager().getLobbyPlayerCount();
+
+            setScore(objective, "§e§lLOBBY", line--);
+            setScore(objective, "§7Players: §a" + lobbyPlayers, line--);
+            setScore(objective, "§7Votes: §b" + votes + "§7/§b" + required, line--);
+            setScore(objective, "§7Use §a/vote §7to start!", line--);
+        } else if (state == GameState.GENERATING) {
+            setScore(objective, "§6§lGENERATING...", line--);
+            setScore(objective, "§7Creating world...", line--);
+            setScore(objective, "  ", line--);
+            setScore(objective, "   ", line--);
+        } else if (state == GameState.ACTIVE) {
+            // Active run
+            int runId = plugin.getRunManager().getCurrentRunId();
+            long runDuration = plugin.getRunManager().getRunDurationSeconds();
+
+            setScore(objective, "§b§lRun #" + runId, line--);
+            setScore(objective, "§7Duration: §f" + TimeUtil.formatDuration(runDuration), line--);
+            setScore(objective, "§7Players: §a" + plugin.getWorldManager().getHardcorePlayerCount(), line--);
+            setScore(objective, "  ", line--);
+        } else if (state == GameState.RESETTING) {
+            setScore(objective, "§c§lRESETTING...", line--);
+            setScore(objective, "§7Returning to lobby...", line--);
+            setScore(objective, "  ", line--);
+            setScore(objective, "   ", line--);
+        }
 
         // Blank line
-        setScore(objective, "  ", line--);
+        setScore(objective, "    ", line--);
 
         // Your stats
         setScore(objective, "§d§lYour Stats", line--);
@@ -77,7 +103,7 @@ public class ScoreboardManager {
         setScore(objective, "§7Achievements: §e" + achievements + "§8/§7" + totalAchievements, line--);
 
         // Blank line
-        setScore(objective, "   ", line--);
+        setScore(objective, "     ", line--);
 
         // Server
         setScore(objective, "§8dragonrun.server", line--);
