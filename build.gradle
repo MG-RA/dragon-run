@@ -35,7 +35,9 @@ tasks.named('assemble') {
 }
 
 tasks.named('shadowJar') {
+    archiveBaseName.set('DragonRun')
     archiveClassifier.set('')
+    archiveVersion.set('')
     // Relocate to avoid conflicts with other plugins
     // Note: Don't relocate postgresql as it breaks JDBC driver loading
     relocate 'com.zaxxer.hikari', 'com.dragonrun.libs.hikari'
@@ -50,3 +52,16 @@ tasks.named('processResources') {
         expand props
     }
 }
+
+// Auto-copy JAR to test server after building
+tasks.register('copyToTestServer', Copy) {
+    dependsOn shadowJar
+    from shadowJar.archiveFile
+    into file('testserver/plugins')
+    rename { fileName ->
+        'DragonRun.jar'
+    }
+}
+
+// Make shadowJar automatically copy to test server
+shadowJar.finalizedBy copyToTestServer
