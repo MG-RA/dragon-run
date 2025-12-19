@@ -68,5 +68,7 @@ director:
   enabled: true
   # WebSocket server port
   port: 8765
-  # State broadcast interval (ticks, 20 = 1 second)
-  broadcast-interval: 20
+  # State broadcast interval (ticks, 100 = 5 seconds)
+  broadcast-interval: 100
+  # Monitor chat messages and send to director
+  monitor-chat: true

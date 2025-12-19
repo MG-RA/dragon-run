@@ -108,6 +108,11 @@ public class RunManager {
         // Create database record
         createRunRecord(worldManager.getCurrentWorldSeed());
 
+        // Reset per-run trackers
+        if (plugin.getResourceMilestoneListener() != null) {
+            plugin.getResourceMilestoneListener().resetMilestones();
+        }
+
         broadcastGeneratingMessage();
 
         // Broadcast to Director AI

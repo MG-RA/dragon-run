@@ -36,6 +36,7 @@ public class DragonRunPlugin extends JavaPlugin {
     private VoteManager voteManager;
     private ScoreboardManager scoreboardManager;
     private AchievementListener achievementListener;
+    private com.dragonrun.listeners.ResourceMilestoneListener resourceMilestoneListener;
     private DirectorWebSocketServer directorServer;
 
     @Override
@@ -73,6 +74,10 @@ public class DragonRunPlugin extends JavaPlugin {
         getServer().getPluginManager().registerEvents(achievementListener, this);
         getServer().getPluginManager().registerEvents(new LobbyProtectionListener(worldManager), this);
         getServer().getPluginManager().registerEvents(new com.dragonrun.listeners.PortalDebugListener(this), this);
+        getServer().getPluginManager().registerEvents(new com.dragonrun.listeners.DirectorChatListener(this), this);
+        getServer().getPluginManager().registerEvents(new com.dragonrun.listeners.DamageListener(this), this);
+        resourceMilestoneListener = new com.dragonrun.listeners.ResourceMilestoneListener(this);
+        getServer().getPluginManager().registerEvents(resourceMilestoneListener, this);
 
         // 6. Register commands using Paper's lifecycle events
         registerCommands();
@@ -89,7 +94,7 @@ public class DragonRunPlugin extends JavaPlugin {
         // 9. Initialize Director AI WebSocket server (if enabled)
         if (getConfig().getBoolean("director.enabled", false)) {
             int port = getConfig().getInt("director.port", 8765);
-            int broadcastInterval = getConfig().getInt("director.broadcast-interval", 20);
+            int broadcastInterval = getConfig().getInt("director.broadcast-interval", 100);
 
             directorServer = new DirectorWebSocketServer(this, port);
             directorServer.start();
@@ -177,6 +182,10 @@ public class DragonRunPlugin extends JavaPlugin {
         return directorServer;
     }
 
+    public com.dragonrun.listeners.ResourceMilestoneListener getResourceMilestoneListener() {
+        return resourceMilestoneListener;
+    }
+
     @SuppressWarnings("UnstableApiUsage")
     private void registerCommands() {
         getLifecycleManager().registerEventHandler(LifecycleEvents.COMMANDS, event -> {
@@ -187,6 +196,7 @@ public class DragonRunPlugin extends JavaPlugin {
             new BetCommand(this).register(commands);
             new LiveCommand(this).register(commands);
             new VoteCommand(this).register(commands);
+            new com.dragonrun.director.DirectorCommands(this).register(commands);
         });
     }
 }

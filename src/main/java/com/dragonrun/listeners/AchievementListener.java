@@ -29,6 +29,8 @@ public class AchievementListener implements Listener {
     private final Map<UUID, Integer> runFoodEaten = new ConcurrentHashMap<>();
     private final Map<UUID, Long> runJoinTime = new ConcurrentHashMap<>();
     private final Map<UUID, Integer> runsEnded = new ConcurrentHashMap<>();
+    private final Map<UUID, Boolean> netherVisited = new ConcurrentHashMap<>();
+    private final Map<UUID, Boolean> endVisited = new ConcurrentHashMap<>();
 
     // Track lifetime stats (loaded from DB would be better, but tracking in-memory for now)
     private final Map<UUID, Integer> lifetimeDeaths = new ConcurrentHashMap<>();
@@ -111,6 +113,15 @@ public class AchievementListener implements Listener {
         if (entity instanceof EnderDragon) {
             achievementManager.award(uuid, "dragon_slayer");
 
+            // Broadcast dragon kill event to director
+            if (plugin.getDirectorServer() != null) {
+                com.google.gson.JsonObject data = new com.google.gson.JsonObject();
+                data.addProperty("player", killer.getName());
+                data.addProperty("uuid", uuid.toString());
+                data.addProperty("duration", plugin.getRunManager().getRunDurationSeconds());
+                plugin.getDirectorServer().broadcastEvent("dragon_killed", data);
+            }
+
             // Check speedrun achievements
             long runDuration = plugin.getRunManager().getRunDurationSeconds();
             if (runDuration < 15 * 60) { // Under 15 minutes
@@ -143,14 +154,37 @@ public class AchievementListener implements Listener {
         Player player = event.getPlayer();
         UUID uuid = player.getUniqueId();
         String worldName = player.getWorld().getName().toLowerCase();
+        String fromWorld = event.getFrom().getName().toLowerCase();
+
+        // Determine dimension names
+        String toDimension = getDimensionName(worldName);
+        String fromDimension = getDimensionName(fromWorld);
+
+        // Only broadcast if it's a real dimension change (not just world reload)
+        if (!toDimension.equals(fromDimension) && plugin.getDirectorServer() != null) {
+            com.google.gson.JsonObject data = new com.google.gson.JsonObject();
+            data.addProperty("player", player.getName());
+            data.addProperty("uuid", uuid.toString());
+            data.addProperty("from", fromDimension);
+            data.addProperty("to", toDimension);
+            plugin.getDirectorServer().broadcastEvent("player_dimension_change", data);
+        }
 
         if (worldName.contains("nether")) {
+            netherVisited.put(uuid, true);
             achievementManager.award(uuid, "nether_explorer");
         }
 
         if (worldName.contains("end")) {
+            endVisited.put(uuid, true);
             achievementManager.award(uuid, "the_end");
         }
+    }
+
+    private String getDimensionName(String worldName) {
+        if (worldName.contains("nether")) return "nether";
+        if (worldName.contains("end")) return "end";
+        return "overworld";
     }
 
     @EventHandler
@@ -308,5 +342,37 @@ public class AchievementListener implements Listener {
         runMobKills.clear();
         runFoodEaten.clear();
         runJoinTime.clear();
+        netherVisited.clear();
+        endVisited.clear();
+    }
+
+    /**
+     * Get mob kills for a player in current run.
+     */
+    public int getRunMobKills(UUID uuid) {
+        return runMobKills.getOrDefault(uuid, 0);
+    }
+
+    /**
+     * Get seconds alive for a player in current run.
+     */
+    public long getAliveSeconds(UUID uuid) {
+        Long joinTime = runJoinTime.get(uuid);
+        if (joinTime == null) return 0;
+        return (System.currentTimeMillis() - joinTime) / 1000;
+    }
+
+    /**
+     * Check if player has entered nether in current run.
+     */
+    public boolean hasEnteredNether(UUID uuid) {
+        return netherVisited.getOrDefault(uuid, false);
+    }
+
+    /**
+     * Check if player has entered the end in current run.
+     */
+    public boolean hasEnteredEnd(UUID uuid) {
+        return endVisited.getOrDefault(uuid, false);
     }
 }

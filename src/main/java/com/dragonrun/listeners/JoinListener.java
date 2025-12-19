@@ -37,6 +37,16 @@ public class JoinListener implements Listener {
         int aura = plugin.getAuraManager().getAura(player.getUniqueId());
         event.joinMessage(MessageUtil.joinMessage(player.getName(), aura));
 
+        // Notify director of player join
+        if (plugin.getDirectorServer() != null) {
+            com.google.gson.JsonObject data = new com.google.gson.JsonObject();
+            data.addProperty("player", player.getName());
+            data.addProperty("uuid", player.getUniqueId().toString());
+            data.addProperty("aura", aura);
+            data.addProperty("isNewPlayer", !player.hasPlayedBefore());
+            plugin.getDirectorServer().broadcastEvent("player_joined", data);
+        }
+
         // Handle world placement based on game state
         GameState state = plugin.getRunManager().getGameState();
 

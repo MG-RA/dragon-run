@@ -140,6 +140,19 @@ public class AchievementManager {
                 achievement.auraReward()
         ));
 
+        // Broadcast to Eris
+        if (plugin.getDirectorServer() != null) {
+            com.google.gson.JsonObject data = new com.google.gson.JsonObject();
+            data.addProperty("player", playerName);
+            data.addProperty("playerUuid", uuid.toString());
+            data.addProperty("achievementId", achievementId);
+            data.addProperty("achievementName", achievement.name());
+            data.addProperty("description", achievement.description());
+            data.addProperty("auraReward", achievement.auraReward());
+            data.addProperty("category", achievement.category().name());
+            plugin.getDirectorServer().broadcastEvent("achievement_unlocked", data);
+        }
+
         // Update scoreboard (achievements changed, aura changed)
         if (player != null && player.isOnline()) {
             plugin.getScoreboardManager().updateScoreboard(player);
