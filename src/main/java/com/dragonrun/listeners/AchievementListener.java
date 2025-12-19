@@ -113,14 +113,8 @@ public class AchievementListener implements Listener {
         if (entity instanceof EnderDragon) {
             achievementManager.award(uuid, "dragon_slayer");
 
-            // Broadcast dragon kill event to director
-            if (plugin.getDirectorServer() != null) {
-                com.google.gson.JsonObject data = new com.google.gson.JsonObject();
-                data.addProperty("player", killer.getName());
-                data.addProperty("uuid", uuid.toString());
-                data.addProperty("duration", plugin.getRunManager().getRunDurationSeconds());
-                plugin.getDirectorServer().broadcastEvent("dragon_killed", data);
-            }
+            // End the run with victory!
+            plugin.getRunManager().endRunByDragonKill(uuid);
 
             // Check speedrun achievements
             long runDuration = plugin.getRunManager().getRunDurationSeconds();

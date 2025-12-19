@@ -7,6 +7,12 @@ import net.kyori.adventure.text.Component;
 import net.kyori.adventure.text.format.NamedTextColor;
 import net.kyori.adventure.title.Title;
 import org.bukkit.Bukkit;
+import org.bukkit.Color;
+import org.bukkit.FireworkEffect;
+import org.bukkit.Location;
+import org.bukkit.entity.Firework;
+import org.bukkit.entity.Player;
+import org.bukkit.inventory.meta.FireworkMeta;
 
 import java.sql.Connection;
 import java.sql.PreparedStatement;
@@ -182,17 +188,26 @@ public class RunManager {
 
         gameState = GameState.RESETTING;
         dragonAlive = false;
+        long duration = getRunDurationSeconds();
         endRun("DRAGON_KILLED", null, killerUuid);
+
+        // Get killer name for celebration
+        String killerName = Bukkit.getOfflinePlayer(killerUuid).getName();
+        if (killerName == null) killerName = "Unknown";
 
         // Broadcast to Director AI
         com.google.gson.JsonObject data = new com.google.gson.JsonObject();
         data.addProperty("runId", currentRunId);
         data.addProperty("killerUuid", killerUuid.toString());
+        data.addProperty("player", killerName);
         data.addProperty("outcome", "DRAGON_KILLED");
-        data.addProperty("duration", getRunDurationSeconds());
+        data.addProperty("duration", duration);
         if (plugin.getDirectorServer() != null) {
-            plugin.getDirectorServer().broadcastEvent("run_ended", data);
+            plugin.getDirectorServer().broadcastEvent("dragon_killed", data);
         }
+
+        // Victory celebration!
+        celebrateVictory(killerName, duration);
 
         // Pay out bets on successful run
         plugin.getBettingManager().processRunCompletion();
@@ -206,6 +221,75 @@ public class RunManager {
         Bukkit.getAsyncScheduler().runDelayed(plugin, task -> {
             worldManager.deleteHardcoreWorld().thenRun(this::completeReset);
         }, delaySeconds, TimeUnit.SECONDS);
+    }
+
+    /**
+     * Celebrate a dragon kill victory with titles and fireworks.
+     */
+    private void celebrateVictory(String killerName, long durationSeconds) {
+        long mins = durationSeconds / 60;
+        long secs = durationSeconds % 60;
+        String timeStr = String.format("%d:%02d", mins, secs);
+
+        // Show victory title to all players
+        Title victoryTitle = Title.title(
+                Component.text("VICTORY!", NamedTextColor.GOLD),
+                Component.text(killerName + " slew the dragon in " + timeStr, NamedTextColor.GREEN),
+                Title.Times.times(Duration.ofMillis(500), Duration.ofSeconds(5), Duration.ofSeconds(2))
+        );
+
+        for (Player player : Bukkit.getOnlinePlayers()) {
+            player.showTitle(victoryTitle);
+        }
+
+        // Broadcast victory message
+        Bukkit.broadcast(MessageUtil.success("The Ender Dragon has been slain by " + killerName + "!"));
+        Bukkit.broadcast(MessageUtil.success("Run #" + currentRunId + " completed in " + timeStr));
+
+        // Spawn fireworks for all players in the hardcore world
+        spawnVictoryFireworks();
+
+        // Continue spawning fireworks for a few seconds
+        for (int i = 1; i <= 5; i++) {
+            Bukkit.getScheduler().runTaskLater(plugin, this::spawnVictoryFireworks, i * 20L);
+        }
+    }
+
+    /**
+     * Spawn celebratory fireworks near all players.
+     */
+    private void spawnVictoryFireworks() {
+        for (Player player : Bukkit.getOnlinePlayers()) {
+            // Only for players in any world (lobby will see it too as celebration)
+            Location loc = player.getLocation().add(
+                    (Math.random() - 0.5) * 10,
+                    5,
+                    (Math.random() - 0.5) * 10
+            );
+
+            Firework fw = player.getWorld().spawn(loc, Firework.class);
+            FireworkMeta meta = fw.getFireworkMeta();
+
+            // Random colorful effects
+            Color[] colors = {Color.RED, Color.GREEN, Color.BLUE, Color.YELLOW, Color.PURPLE, Color.AQUA, Color.WHITE};
+            Color primary = colors[(int) (Math.random() * colors.length)];
+            Color fade = colors[(int) (Math.random() * colors.length)];
+
+            FireworkEffect.Type[] types = {FireworkEffect.Type.BALL, FireworkEffect.Type.BALL_LARGE, FireworkEffect.Type.STAR, FireworkEffect.Type.BURST};
+            FireworkEffect.Type type = types[(int) (Math.random() * types.length)];
+
+            FireworkEffect effect = FireworkEffect.builder()
+                    .with(type)
+                    .withColor(primary)
+                    .withFade(fade)
+                    .trail(Math.random() > 0.5)
+                    .flicker(Math.random() > 0.5)
+                    .build();
+
+            meta.addEffect(effect);
+            meta.setPower(1 + (int) (Math.random() * 2));
+            fw.setFireworkMeta(meta);
+        }
     }
 
     /**

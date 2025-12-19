@@ -133,6 +133,14 @@ public class PortalDebugListener implements Listener {
                             return;
                         }
 
+                        // Check if dragon is dead and run is still active - trigger victory!
+                        // This handles the case where dragon death event didn't fire properly
+                        if (!plugin.getRunManager().isDragonAlive() &&
+                            plugin.getRunManager().getGameState() == com.dragonrun.managers.GameState.ACTIVE) {
+                            plugin.getLogger().info("[PORTAL DEBUG] Dragon dead, triggering victory via End portal exit");
+                            plugin.getRunManager().endRunByDragonKill(player.getUniqueId());
+                        }
+
                         // Teleport to world spawn
                         targetLoc = targetWorld.getSpawnLocation();
                         plugin.getLogger().warning("[PORTAL DEBUG] Teleporting to overworld spawn at " + targetLoc);
