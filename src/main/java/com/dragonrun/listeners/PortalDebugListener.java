@@ -23,20 +23,14 @@ public class PortalDebugListener implements Listener {
 
     @EventHandler(priority = EventPriority.MONITOR)
     public void onPortalCreate(PortalCreateEvent event) {
-        plugin.getLogger().info("[PORTAL DEBUG] Portal created: " +
-                "Type=" + event.getReason() +
-                ", World=" + event.getWorld().getName() +
-                ", Cancelled=" + event.isCancelled());
+        // Debug logging disabled - uncomment if needed for troubleshooting
+        // plugin.getLogger().info("[PORTAL] Portal created: Type=" + event.getReason() + ", World=" + event.getWorld().getName());
     }
 
     @EventHandler(priority = EventPriority.MONITOR)
     public void onPlayerPortal(PlayerPortalEvent event) {
-        plugin.getLogger().info("[PORTAL DEBUG] Player portal event: " +
-                "Player=" + event.getPlayer().getName() +
-                ", From=" + event.getFrom().getWorld().getName() +
-                ", To=" + (event.getTo() != null ? event.getTo().getWorld().getName() : "null") +
-                ", Cause=" + event.getCause() +
-                ", Cancelled=" + event.isCancelled());
+        // Debug logging disabled - uncomment if needed for troubleshooting
+        // plugin.getLogger().info("[PORTAL] Player portal: " + event.getPlayer().getName() + " " + event.getCause());
     }
 
     @EventHandler(priority = EventPriority.MONITOR)
@@ -46,14 +40,8 @@ public class PortalDebugListener implements Listener {
             org.bukkit.Location loc = event.getLocation();
             org.bukkit.block.Block block = loc.getBlock();
 
-            plugin.getLogger().info("[PORTAL DEBUG] Entity entered portal: " +
-                    "Entity=" + event.getEntity().getType() +
-                    ", Player=" + player.getName() +
-                    ", GameMode=" + player.getGameMode() +
-                    ", Location=" + event.getLocation() +
-                    ", World=" + event.getLocation().getWorld().getName() +
-                    ", BlockType=" + block.getType() +
-                    ", PortalCooldown=" + player.getPortalCooldown());
+            // Debug logging disabled - uncomment if needed for troubleshooting
+            // plugin.getLogger().info("[PORTAL] " + player.getName() + " entered " + block.getType());
 
             // WORKAROUND: Manually trigger portal travel if PlayerPortalEvent doesn't fire
             if (player.getPortalCooldown() == 0) {
@@ -63,7 +51,6 @@ public class PortalDebugListener implements Listener {
                 if (blockType == org.bukkit.Material.NETHER_PORTAL) {
                     org.bukkit.World currentWorld = player.getWorld();
                     String worldName = currentWorld.getName();
-                    plugin.getLogger().warning("[PORTAL DEBUG] Nether portal - attempting teleport from " + worldName);
 
                     // Set cooldown IMMEDIATELY to prevent spam (300 ticks = 15 seconds)
                     player.setPortalCooldown(300);
@@ -79,7 +66,7 @@ public class PortalDebugListener implements Listener {
                         targetWorld = server.getWorld(overworldName);
 
                         if (targetWorld == null) {
-                            plugin.getLogger().severe("[PORTAL DEBUG] Overworld not found: " + overworldName);
+                            plugin.getLogger().severe("[PORTAL] Overworld not found: " + overworldName);
                             return;
                         }
                     } else {
@@ -87,25 +74,19 @@ public class PortalDebugListener implements Listener {
                         targetWorld = server.getWorld(worldName + "_nether");
 
                         if (targetWorld == null) {
-                            plugin.getLogger().warning("[PORTAL DEBUG] Nether world doesn't exist, creating it...");
                             org.bukkit.WorldCreator creator = new org.bukkit.WorldCreator(worldName + "_nether")
                                     .environment(org.bukkit.World.Environment.NETHER)
                                     .seed(currentWorld.getSeed());
                             targetWorld = creator.createWorld();
-                            if (targetWorld != null) {
-                                plugin.getLogger().warning("[PORTAL DEBUG] Created nether world: " + targetWorld.getName());
-                            } else {
-                                plugin.getLogger().severe("[PORTAL DEBUG] Failed to create nether world!");
+                            if (targetWorld == null) {
+                                plugin.getLogger().severe("[PORTAL] Failed to create nether world!");
                                 return;
                             }
                         }
                     }
 
                     // Use PortalManager to handle portal creation and linking
-                    plugin.getLogger().warning("[PORTAL DEBUG] Using PortalManager to handle portal teleport");
                     targetLoc = PortalManager.handlePortalTeleport(player, targetWorld);
-                    plugin.getLogger().warning("[PORTAL DEBUG] Teleporting to " + targetLoc);
-
                     player.teleport(targetLoc);
                 }
 
@@ -113,7 +94,6 @@ public class PortalDebugListener implements Listener {
                 else if (blockType == org.bukkit.Material.END_PORTAL) {
                     org.bukkit.World currentWorld = player.getWorld();
                     String worldName = currentWorld.getName();
-                    plugin.getLogger().warning("[PORTAL DEBUG] End portal - attempting teleport from " + worldName);
 
                     // Set cooldown to prevent spam
                     player.setPortalCooldown(300);
@@ -124,12 +104,11 @@ public class PortalDebugListener implements Listener {
 
                     // Check if in the End (return to overworld)
                     if (worldName.endsWith("_the_end")) {
-                        plugin.getLogger().warning("[PORTAL DEBUG] Returning from End to Overworld");
                         String overworldName = worldName.replace("_the_end", "");
                         targetWorld = server.getWorld(overworldName);
 
                         if (targetWorld == null) {
-                            plugin.getLogger().severe("[PORTAL DEBUG] Overworld not found: " + overworldName);
+                            plugin.getLogger().severe("[PORTAL] Overworld not found: " + overworldName);
                             return;
                         }
 
@@ -137,13 +116,11 @@ public class PortalDebugListener implements Listener {
                         // This handles the case where dragon death event didn't fire properly
                         if (!plugin.getRunManager().isDragonAlive() &&
                             plugin.getRunManager().getGameState() == com.dragonrun.managers.GameState.ACTIVE) {
-                            plugin.getLogger().info("[PORTAL DEBUG] Dragon dead, triggering victory via End portal exit");
                             plugin.getRunManager().endRunByDragonKill(player.getUniqueId());
                         }
 
                         // Teleport to world spawn
                         targetLoc = targetWorld.getSpawnLocation();
-                        plugin.getLogger().warning("[PORTAL DEBUG] Teleporting to overworld spawn at " + targetLoc);
                         player.teleport(targetLoc);
                         player.sendMessage("§a[Portal] Returning to the Overworld...");
                         return;
@@ -152,15 +129,12 @@ public class PortalDebugListener implements Listener {
                     // Going to the End - Get or create the End world
                     targetWorld = server.getWorld(worldName + "_the_end");
                     if (targetWorld == null) {
-                        plugin.getLogger().warning("[PORTAL DEBUG] End world doesn't exist, creating it...");
                         org.bukkit.WorldCreator creator = new org.bukkit.WorldCreator(worldName + "_the_end")
                                 .environment(org.bukkit.World.Environment.THE_END)
                                 .seed(currentWorld.getSeed());
                         targetWorld = creator.createWorld();
-                        if (targetWorld != null) {
-                            plugin.getLogger().warning("[PORTAL DEBUG] Created End world: " + targetWorld.getName());
-                        } else {
-                            plugin.getLogger().severe("[PORTAL DEBUG] Failed to create End world!");
+                        if (targetWorld == null) {
+                            plugin.getLogger().severe("[PORTAL] Failed to create End world!");
                             return;
                         }
                     }
@@ -170,8 +144,6 @@ public class PortalDebugListener implements Listener {
                     int platformX = 100;
                     int platformY = 48;
                     int platformZ = 0;
-
-                    plugin.getLogger().warning("[PORTAL DEBUG] Creating End platform at " + platformX + ", " + platformY + ", " + platformZ);
 
                     // Create 5x5 obsidian platform
                     for (int x = platformX - 2; x <= platformX + 2; x++) {
@@ -186,7 +158,6 @@ public class PortalDebugListener implements Listener {
 
                     // Teleport to center of platform
                     targetLoc = new org.bukkit.Location(targetWorld, platformX + 0.5, platformY, platformZ + 0.5);
-                    plugin.getLogger().warning("[PORTAL DEBUG] Teleporting to End platform at " + targetLoc);
                     player.teleport(targetLoc);
                     player.sendMessage("§d[Portal] Entering the End...");
                 }
@@ -196,21 +167,13 @@ public class PortalDebugListener implements Listener {
 
     @EventHandler(priority = EventPriority.MONITOR)
     public void onEntityPortal(EntityPortalEvent event) {
-        plugin.getLogger().info("[PORTAL DEBUG] Entity portal teleport: " +
-                "Entity=" + event.getEntity().getType() +
-                ", From=" + event.getFrom().getWorld().getName() +
-                ", To=" + (event.getTo() != null ? event.getTo().getWorld().getName() : "null") +
-                ", Cancelled=" + event.isCancelled());
+        // Debug logging disabled - uncomment if needed for troubleshooting
+        // plugin.getLogger().info("[PORTAL] Entity teleport: " + event.getEntity().getType());
     }
 
     @EventHandler(priority = EventPriority.HIGHEST)
     public void onPlayerPortalEarly(PlayerPortalEvent event) {
-        plugin.getLogger().warning("[PORTAL DEBUG EARLY] PlayerPortalEvent triggered!" +
-                " Player=" + event.getPlayer().getName() +
-                ", GameMode=" + event.getPlayer().getGameMode() +
-                ", From=" + event.getFrom().getWorld().getName() +
-                ", Cause=" + event.getCause() +
-                ", SearchRadius=" + event.getSearchRadius() +
-                ", CreationRadius=" + event.getCreationRadius());
+        // Debug logging disabled - uncomment if needed for troubleshooting
+        // plugin.getLogger().info("[PORTAL] PlayerPortalEvent: " + event.getPlayer().getName() + " " + event.getCause());
     }
 }
