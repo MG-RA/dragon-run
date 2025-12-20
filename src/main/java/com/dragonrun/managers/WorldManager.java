@@ -125,7 +125,7 @@ public class WorldManager {
         }
 
         // Always ensure spawn platform exists and is safe (may need rebuilding)
-        ensureSpawnPlatform(lobby);
+        //ensureSpawnPlatform(lobby);
         configureLobbyWorld(lobby);
         lobbySpawn = getLobbySpawnLocation(lobby);
 
