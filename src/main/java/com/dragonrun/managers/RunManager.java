@@ -189,25 +189,45 @@ public class RunManager {
         gameState = GameState.RESETTING;
         dragonAlive = false;
         long duration = getRunDurationSeconds();
+
+        // Get all players who participated (in hardcore world or the end)
+        java.util.List<String> victorNames = new java.util.ArrayList<>();
+        for (Player p : Bukkit.getOnlinePlayers()) {
+            String worldName = p.getWorld().getName();
+            // Include players in hardcore world or its nether/end dimensions
+            if (currentWorldName != null &&
+                (worldName.equals(currentWorldName) ||
+                 worldName.equals(currentWorldName + "_nether") ||
+                 worldName.equals(currentWorldName + "_the_end"))) {
+                victorNames.add(p.getName());
+            }
+        }
+
+        // Save run to database (killer gets credited as dragon_killer)
         endRun("DRAGON_KILLED", null, killerUuid);
 
-        // Get killer name for celebration
+        // Get killer name for the "final blow" credit
         String killerName = Bukkit.getOfflinePlayer(killerUuid).getName();
         if (killerName == null) killerName = "Unknown";
 
-        // Broadcast to Director AI
+        // Broadcast to Director AI with all victors
         com.google.gson.JsonObject data = new com.google.gson.JsonObject();
         data.addProperty("runId", currentRunId);
         data.addProperty("killerUuid", killerUuid.toString());
         data.addProperty("player", killerName);
         data.addProperty("outcome", "DRAGON_KILLED");
         data.addProperty("duration", duration);
+        com.google.gson.JsonArray victorsArray = new com.google.gson.JsonArray();
+        for (String name : victorNames) {
+            victorsArray.add(name);
+        }
+        data.add("victors", victorsArray);
         if (plugin.getDirectorServer() != null) {
             plugin.getDirectorServer().broadcastEvent("dragon_killed", data);
         }
 
-        // Victory celebration!
-        celebrateVictory(killerName, duration);
+        // Victory celebration with all participants!
+        celebrateVictory(killerName, victorNames, duration);
 
         // Pay out bets on successful run
         plugin.getBettingManager().processRunCompletion();
@@ -226,15 +246,23 @@ public class RunManager {
     /**
      * Celebrate a dragon kill victory with titles and fireworks.
      */
-    private void celebrateVictory(String killerName, long durationSeconds) {
+    private void celebrateVictory(String killerName, java.util.List<String> allVictors, long durationSeconds) {
         long mins = durationSeconds / 60;
         long secs = durationSeconds % 60;
         String timeStr = String.format("%d:%02d", mins, secs);
 
+        // Build subtitle showing all victors or just the killer
+        String subtitle;
+        if (allVictors.size() > 1) {
+            subtitle = String.join(", ", allVictors) + " defeated the dragon in " + timeStr;
+        } else {
+            subtitle = killerName + " slew the dragon in " + timeStr;
+        }
+
         // Show victory title to all players
         Title victoryTitle = Title.title(
                 Component.text("VICTORY!", NamedTextColor.GOLD),
-                Component.text(killerName + " slew the dragon in " + timeStr, NamedTextColor.GREEN),
+                Component.text(subtitle, NamedTextColor.GREEN),
                 Title.Times.times(Duration.ofMillis(500), Duration.ofSeconds(5), Duration.ofSeconds(2))
         );
 
@@ -242,8 +270,13 @@ public class RunManager {
             player.showTitle(victoryTitle);
         }
 
-        // Broadcast victory message
-        Bukkit.broadcast(MessageUtil.success("The Ender Dragon has been slain by " + killerName + "!"));
+        // Broadcast victory message crediting all players
+        if (allVictors.size() > 1) {
+            Bukkit.broadcast(MessageUtil.success("The Ender Dragon has been slain!"));
+            Bukkit.broadcast(MessageUtil.success("Victors: " + String.join(", ", allVictors)));
+        } else {
+            Bukkit.broadcast(MessageUtil.success("The Ender Dragon has been slain by " + killerName + "!"));
+        }
         Bukkit.broadcast(MessageUtil.success("Run #" + currentRunId + " completed in " + timeStr));
 
         // Spawn fireworks for all players in the hardcore world
