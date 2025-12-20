@@ -1,0 +1,50 @@
+websocket:
+  uri: "ws://localhost:8765"
+  reconnect_interval: 5
+
+ollama:
+  host: "http://localhost:11434"
+  model: "ministral-3:14b"
+  context_size: 32768
+  temperature: 0.7
+
+database:
+  host: "localhost"
+  port: 5432
+  name: "dragonrun"
+  user: "postgres"
+  password: "root"
+
+commentary:
+  enabled: true
+  cooldown_seconds: 30
+  triggers:
+    player_death: true
+    dimension_change: true
+    near_death: true
+    player_damaged: true  # Close calls and big hits
+    milestone: true
+    achievement: true
+    dragon_phase: true
+    player_chat: true  # Respond to chat messages
+    player_join: true  # Greet players when they join
+    run_start: true  # Narrate when a run begins
+    combat: false  # Only notable kills (too spammy if true)
+
+proactive:
+  enabled: true
+  cooldown_seconds: 75  # 60-90 seconds between proactive messages
+  quiet_threshold_seconds: 120  # Comment after 2 min of no events
+
+intervention:
+  enabled: true
+  cooldown_seconds: 180  # 3 minutes between interventions
+  types:
+    mercy: true        # Help struggling players
+    challenge: true    # Challenge well-equipped players
+    dramatic: true     # Create interesting scenarios
+
+safety:
+  max_commands_per_minute: 30
+  max_mobs_per_spawn: 10
+  log_all_commands: true

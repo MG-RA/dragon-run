@@ -46,5 +46,4 @@ Thumbs.db
 *~
 test-*.txt
 
-# Director AI workspace
-director/
+*.pyc

@@ -1,0 +1,130 @@
+package com.dragonrun.director;
+
+import com.dragonrun.DragonRunPlugin;
+import com.google.gson.JsonObject;
+import org.bukkit.Bukkit;
+
+import java.util.function.Consumer;
+
+/**
+ * Executes director commands received via WebSocket.
+ */
+public class DirectorCommandExecutor {
+
+    /**
+     * Execute a command from the Director AI.
+     *
+     * @param plugin The plugin instance
+     * @param commandJson The command JSON from director
+     * @param callback Callback with execution result
+     */
+    public static void execute(DragonRunPlugin plugin, JsonObject commandJson, Consumer<CommandResult> callback) {
+        // Run on main server thread for thread safety
+        Bukkit.getScheduler().runTask(plugin, () -> {
+            try {
+                String command = commandJson.get("command").getAsString();
+                JsonObject params = commandJson.has("parameters")
+                    ? commandJson.getAsJsonObject("parameters")
+                    : new JsonObject();
+
+                // Build the brigadier command string from the structured data
+                String brigadierCommand = buildBrigadierCommand(command, params);
+
+                if (brigadierCommand == null) {
+                    plugin.getLogger().warning("[Director] Unknown command: " + command);
+                    callback.accept(new CommandResult(false, "Unknown command: " + command));
+                    return;
+                }
+
+                // Log the command being executed
+                plugin.getLogger().info("[Director] Executing: " + brigadierCommand);
+                plugin.getLogger().info("[Director] Parameters: " + params.toString());
+
+                // Execute the command as console (with director permission)
+                boolean success = Bukkit.dispatchCommand(Bukkit.getConsoleSender(), brigadierCommand);
+
+                String resultMsg = success ? "SUCCESS" : "FAILED";
+                plugin.getLogger().info("[Director] Command result: " + resultMsg);
+
+                callback.accept(new CommandResult(success,
+                    success ? "Command executed successfully" : "Command execution failed"));
+
+            } catch (Exception e) {
+                callback.accept(new CommandResult(false, "Error: " + e.getMessage()));
+                plugin.getLogger().warning("Director command execution error: " + e.getMessage());
+            }
+        });
+    }
+
+    /**
+     * Build a Brigadier command string from structured command data.
+     */
+    private static String buildBrigadierCommand(String command, JsonObject params) {
+        return switch (command.toLowerCase()) {
+            case "broadcast" -> {
+                String message = params.get("message").getAsString();
+                // greedyString takes all remaining text, no quotes needed
+                yield "director broadcast " + message;
+            }
+            case "player_message", "message" -> {
+                String player = params.get("player").getAsString();
+                String message = params.get("message").getAsString();
+                yield "director message " + player + " " + message;
+            }
+            case "spawn_mob", "spawn" -> {
+                String mobType = params.get("mobType").getAsString();
+                String nearPlayer = params.get("nearPlayer").getAsString();
+                int count = params.has("count") ? params.get("count").getAsInt() : 1;
+                yield "director spawn mob " + mobType + " near " + nearPlayer + " " + count;
+            }
+            case "give_item", "give" -> {
+                String player = params.get("player").getAsString();
+                String item = params.get("item").getAsString();
+                int count = params.has("count") ? params.get("count").getAsInt() : 1;
+                yield "director give " + player + " " + item + " " + count;
+            }
+            case "apply_effect", "effect" -> {
+                String player = params.get("player").getAsString();
+                String effect = params.get("effect").getAsString();
+                int duration = params.has("duration") ? params.get("duration").getAsInt() : 60;
+                int amplifier = params.has("amplifier") ? params.get("amplifier").getAsInt() : 0;
+                yield "director effect " + player + " " + effect + " " + duration + " " + amplifier;
+            }
+            case "lightning" -> {
+                String nearPlayer = params.get("nearPlayer").getAsString();
+                yield "director lightning near " + nearPlayer;
+            }
+            case "weather" -> {
+                String weatherType = params.get("type").getAsString();
+                yield "director weather " + weatherType;
+            }
+            case "firework" -> {
+                String nearPlayer = params.get("nearPlayer").getAsString();
+                int count = params.has("count") ? params.get("count").getAsInt() : 1;
+                yield "director firework near " + nearPlayer + " " + count;
+            }
+            default -> null;
+        };
+    }
+
+    /**
+     * Result of command execution.
+     */
+    public static class CommandResult {
+        private final boolean success;
+        private final String message;
+
+        public CommandResult(boolean success, String message) {
+            this.success = success;
+            this.message = message;
+        }
+
+        public boolean success() {
+            return success;
+        }
+
+        public String message() {
+            return message;
+        }
+    }
+}
