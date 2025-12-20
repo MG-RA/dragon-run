@@ -1,10 +1,13 @@
 import operator
+import logging
 from typing import Annotated, List, TypedDict, Literal
-from langchain_community.chat_models import ChatOllama
-from langchain_core.messages import BaseMessage, SystemMessage, HumanMessage, trim_messages
+from langchain_ollama import ChatOllama
+from langchain_core.messages import BaseMessage, SystemMessage, HumanMessage, AIMessage, trim_messages
 from langgraph.graph import StateGraph, END
 from langgraph.prebuilt import ToolNode
 from tools import GameInterface
+
+logger = logging.getLogger(__name__)
 
 class AgentState(TypedDict):
     messages: Annotated[List[BaseMessage], operator.add]
@@ -37,6 +40,7 @@ class ErisDirector:
         workflow.add_edge("tools", "agent")
         
         self.app = workflow.compile()
+        logger.info("ErisDirector Agent initialized")
 
     def get_system_prompt(self, context: str) -> SystemMessage:
         return SystemMessage(content=f"""You are ERIS, the AI Director of a Minecraft Speedrun.
@@ -68,15 +72,29 @@ INSTRUCTIONS:
         
         # Inject dynamic context into system prompt
         sys = self.get_system_prompt(state['context_buffer'])
+        logger.info("🧠 Agent thinking...")
+        
         response = await self.llm.ainvoke([sys] + trimmed)
+        
+        if response.tool_calls:
+            logger.info(f"🛠️ Agent decided to use tools: {len(response.tool_calls)} calls")
+            for tc in response.tool_calls:
+                logger.info(f"   -> {tc['name']}: {tc['args']}")
+        else:
+            logger.info(f"💭 Agent response: {response.content[:100]}...")
+            
         return {"messages": [response]}
 
-    def should_continue(self, state: AgentState) -> Literal["tools", END]:
+    def should_continue(self, state: AgentState) -> str:
         last_msg = state['messages'][-1]
-        return "tools" if last_msg.tool_calls else END
+        if isinstance(last_msg, AIMessage) and last_msg.tool_calls:
+            return "tools"
+        logger.info("⏹️ Agent cycle finished")
+        return END
 
     async def tick(self, trigger_event: str, context: str):
         """Wake up the agent to think."""
+        logger.info(f"🔔 Agent Waking Up! Trigger: {trigger_event}")
         inputs = {
             "messages": [HumanMessage(content=f"EVENT UPDATE: {trigger_event}")],
             "context_buffer": context

@@ -1,6 +1,4 @@
 import asyncio
-import json
-import re
 import yaml
 import logging
 import time
@@ -13,7 +11,7 @@ from agent import ErisDirector
 
 # Configure logging
 logging.basicConfig(
-    level=logging.WARNING,
+    level=logging.INFO,
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
     filename='director.log'
 )
@@ -105,7 +103,7 @@ class DragonRunDirector:
             should_wake = True
             trigger_msg = f"Player {event['data']['player']} died!"
             
-        elif self.proactive_engine.should_check(): # Timer based check
+        elif self.proactive_engine.should_analyze(): # Timer based check
             should_wake = True
             trigger_msg = "Routine check: Look at the state and see if anything needs intervention."
 

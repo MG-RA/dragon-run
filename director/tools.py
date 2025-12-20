@@ -1,6 +1,9 @@
 from typing import Literal, List
+import logging
 from langchain_core.tools import tool
 from pydantic import BaseModel, Field
+
+logger = logging.getLogger(__name__)
 
 # Schema definitions help the 14B model understand inputs accurately
 class SpawnMobArgs(BaseModel):
@@ -21,6 +24,7 @@ class GameInterface:
         @tool("spawn_mob", args_schema=SpawnMobArgs)
         async def spawn_mob(mob_type: str, near_player: str, count: int = 1):
             """Spawn hostile mobs near a player to challenge them."""
+            logger.info(f"🔧 Tool Execution: spawn_mob(type={mob_type}, target={near_player}, count={count})")
             # The agent calls this, we execute via WebSocket
             await self.ws_client.send_command('spawn_mob', 
                 {'mobType': mob_type, 'nearPlayer': near_player, 'count': count},
@@ -31,6 +35,7 @@ class GameInterface:
         @tool("give_item", args_schema=GiveItemArgs)
         async def give_item(player: str, item: str, count: int = 1):
             """Give items to a player to help them or reward them."""
+            logger.info(f"🔧 Tool Execution: give_item(player={player}, item={item}, count={count})")
             await self.ws_client.send_command('give', 
                 {'player': player, 'item': item, 'count': count},
                 reason="AI Director Gift"
@@ -40,6 +45,7 @@ class GameInterface:
         @tool("broadcast_message")
         async def broadcast_message(message: str):
             """Send a chat message to the entire server."""
+            logger.info(f"🔧 Tool Execution: broadcast_message('{message}')")
             await self.ws_client.send_command('broadcast', {'message': message})
             return f"CHAT SENT: {message}"
 
