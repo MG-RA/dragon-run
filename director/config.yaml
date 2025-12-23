@@ -1,50 +1,40 @@
+# Eris AI Director Configuration
+
+# WebSocket connection to Minecraft plugin
 websocket:
-  uri: "ws://localhost:8765"
-  reconnect_interval: 5
+  uri: ws://localhost:8765
 
-ollama:
-  host: "http://localhost:11434"
-  model: "ministral-3:14b"
-  context_size: 32768
-  temperature: 0.7
-
+# PostgreSQL Database
 database:
-  host: "localhost"
+  host: localhost
   port: 5432
-  name: "dragonrun"
-  user: "postgres"
-  password: "root"
+  database: dragonrun
+  user: postgres
+  password: root
 
-commentary:
-  enabled: true
-  cooldown_seconds: 30
-  triggers:
-    player_death: true
-    dimension_change: true
-    near_death: true
-    player_damaged: true  # Close calls and big hits
-    milestone: true
-    achievement: true
-    dragon_phase: true
-    player_chat: true  # Respond to chat messages
-    player_join: true  # Greet players when they join
-    run_start: true  # Narrate when a run begins
-    combat: false  # Only notable kills (too spammy if true)
+# Ollama LLM Configuration
+ollama:
+  host: http://localhost:11434
+  model: ministral-3:14b
+  temperature: 0.7
+  keep_alive: 30m
+  context_window: 32768
 
-proactive:
-  enabled: true
-  cooldown_seconds: 75  # 60-90 seconds between proactive messages
-  quiet_threshold_seconds: 120  # Comment after 2 min of no events
+# Event Processing
+event_processor:
+  debounce:
+    state: 15.0          # Process state updates every 15s max
+    player_damaged: 5.0  # Aggregate damage events
+    resource_milestone: 3.0
 
-intervention:
-  enabled: true
-  cooldown_seconds: 180  # 3 minutes between interventions
-  types:
-    mercy: true        # Help struggling players
-    challenge: true    # Challenge well-equipped players
-    dramatic: true     # Create interesting scenarios
+# Memory
+memory:
+  short_term_max_tokens: 25000
+  chat_buffer_size: 50
 
-safety:
-  max_commands_per_minute: 30
-  max_mobs_per_spawn: 10
-  log_all_commands: true
+# Eris Behavior
+eris:
+  mask_stability: 0.7       # 70% chance to keep current mask
+  mask_stability_decay: 0.05  # Decay per event
+  min_stability: 0.3        # Minimum stability threshold
+  speech_cooldown: 5        # Minimum seconds between broadcasts

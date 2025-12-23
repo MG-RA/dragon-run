@@ -1,0 +1,9 @@
+{
+  "dockerfile_lines": [],
+  "graphs": {
+    "eris": "./src/eris/graph/builder.py:create_graph"
+  },
+  "env": ".env",
+  "python_version": "3.11",
+  "dependencies": ["."]
+}
