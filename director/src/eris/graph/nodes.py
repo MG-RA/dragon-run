@@ -69,19 +69,32 @@ async def context_enricher(state: ErisState, db: Database) -> Dict[str, Any]:
     for player in players:
         uuid = player.get("uuid")
         username = player.get("username", "Unknown")
-        logger.info(f"📚 Processing player: {username}, UUID: {uuid}")
         if uuid:
             try:
-                # Ensure UUID is a string (in case it's not already)
                 uuid_str = str(uuid)
                 history = await db.get_player_summary(uuid_str)
                 if history:
+                    # Fetch additional context data
+                    nemesis = await db.get_player_nemesis(uuid_str)
+                    recent_perf = await db.get_player_recent_performance(uuid_str, limit=5)
+
+                    if nemesis:
+                        history["nemesis"] = nemesis
+                    if recent_perf:
+                        history["trend"] = recent_perf.get("trend", "unknown")
+                        history["win_rate"] = recent_perf.get("win_rate", 0)
+                        history["recent_wins"] = recent_perf.get("recent_wins", 0)
+                        history["recent_runs"] = recent_perf.get("recent_runs", 0)
+
                     player_histories[username] = history
-                    logger.info(f"📚 ✅ Loaded history for {username}: {history.get('total_runs', 0)} runs, {history.get('aura', 0)} aura")
+                    logger.info(
+                        f"📚 ✅ {username}: {history.get('total_runs', 0)} runs, "
+                        f"{history.get('aura', 0)} aura, trend={history.get('trend', 'unknown')}, nemesis={nemesis}"
+                    )
                 else:
-                    logger.warning(f"📚 ❌ No history found for {username} (UUID: {uuid_str})")
+                    logger.debug(f"📚 No history for {username}")
             except Exception as e:
-                logger.error(f"📚 Error fetching player history for {username} ({uuid}): {e}", exc_info=True)
+                logger.error(f"📚 Error fetching history for {username}: {e}")
 
     logger.info(f"📚 Context enrichment complete: {len(player_histories)} player histories loaded")
     return {"player_histories": player_histories}
@@ -459,31 +472,116 @@ If you want to say something, use the broadcast or message_player tool.
 
 
 def _build_context(state: ErisState) -> str:
-    """Build narrative context for Eris prompt."""
+    """Build structured narrative context for Eris prompt with logging."""
     lines = []
+    game_state = state.get("game_state", {})
+    player_histories = state.get("player_histories", {})
+    context_buffer = state.get("context_buffer", "")
 
-    # Game state
-    game_state = state["game_state"]
-    if game_state:
-        lines.append(f"Game State: {game_state.get('gameState', 'UNKNOWN')}")
-        players = game_state.get("players", [])
-        if players:
-            lines.append(f"Players Online: {len(players)}")
-            for p in players:
-                health = p.get("health", 0)
-                location = p.get("dimension", "Overworld")
-                lines.append(f"  - {p.get('username')}: {health}♥ ({location})")
+    # === CURRENT RUN SECTION ===
+    run_state = game_state.get("gameState", "UNKNOWN")
+    run_duration = game_state.get("runDuration", 0)
+    if run_duration:
+        minutes = run_duration // 60
+        seconds = run_duration % 60
+        duration_str = f"{minutes}m {seconds}s"
+    else:
+        duration_str = "Just started"
 
-    # Recent events
-    if state["context_buffer"]:
-        lines.append(f"\nRecent Events:\n{state['context_buffer']}")
+    lines.append("=== CURRENT RUN ===")
+    lines.append(f"Status: {run_state} | Duration: {duration_str}")
 
-    # Player histories
-    if state["player_histories"]:
-        lines.append("\nPlayer Stats:")
-        for username, history in list(state["player_histories"].items())[:3]:
+    # === PLAYERS SECTION ===
+    players = game_state.get("players", [])
+    if players:
+        lines.append(f"\n=== PLAYERS ({len(players)} online) ===")
+        for p in players:
+            username = p.get("username", "Unknown")
+            health = p.get("health", 20)
+            dimension = p.get("dimension", "Overworld")
+
+            # Get history for this player
+            history = player_histories.get(username, {})
+            total_runs = history.get("total_runs", 0)
             aura = history.get("aura", 0)
             dragons = history.get("dragons_killed", 0)
-            lines.append(f"  - {username}: {aura} aura, {dragons} dragons killed")
+            nemesis = history.get("nemesis", None)
 
-    return "\n".join(lines) if lines else "No context available."
+            # Determine player experience level
+            if total_runs == 0:
+                exp_label = "First-timer"
+            elif total_runs < 5:
+                exp_label = f"Rookie ({total_runs} runs)"
+            elif total_runs < 20:
+                exp_label = f"Regular ({total_runs} runs)"
+            else:
+                exp_label = f"Veteran ({total_runs} runs)"
+
+            # Get trend info
+            trend = history.get("trend", "unknown")
+            trend_label = ""
+            if trend == "improving":
+                trend_label = " 📈 Improving"
+            elif trend == "struggling":
+                trend_label = " 📉 Struggling"
+            elif trend == "stable":
+                trend_label = " ➡️ Stable"
+
+            # Build player line
+            player_line = f"• {username}: {health:.0f}♥ {dimension} | {exp_label}, {aura} aura"
+            if dragons > 0:
+                player_line += f", {dragons} dragons slain"
+            if trend_label:
+                player_line += trend_label
+            if nemesis:
+                player_line += f" | Nemesis: {nemesis}"
+
+            lines.append(player_line)
+    else:
+        lines.append("\n=== PLAYERS ===")
+        lines.append("No players online")
+
+    # === RECENT EVENTS SECTION ===
+    if context_buffer and context_buffer.strip():
+        event_lines = context_buffer.strip().split("\n")
+        lines.append(f"\n=== RECENT EVENTS ({len(event_lines)} events) ===")
+        # Show last 15 events max in context
+        for event_line in event_lines[-15:]:
+            lines.append(event_line)
+    else:
+        lines.append("\n=== RECENT EVENTS ===")
+        lines.append("No recent events")
+
+    context_str = "\n".join(lines)
+
+    # === CONTEXT LOGGING (Summary) ===
+    event_type_counts = {}
+    if context_buffer:
+        for line in context_buffer.split("\n"):
+            if line.startswith("⚰️"):
+                event_type_counts["deaths"] = event_type_counts.get("deaths", 0) + 1
+            elif line.startswith("["):
+                event_type_counts["chat"] = event_type_counts.get("chat", 0) + 1
+            elif line.startswith("🐉"):
+                event_type_counts["dragon_kills"] = event_type_counts.get("dragon_kills", 0) + 1
+            elif line.startswith("⚡") or line.startswith("💥"):
+                event_type_counts["damage"] = event_type_counts.get("damage", 0) + 1
+            elif line.startswith("🌍"):
+                event_type_counts["dimension"] = event_type_counts.get("dimension", 0) + 1
+            elif line.startswith("📦"):
+                event_type_counts["milestones"] = event_type_counts.get("milestones", 0) + 1
+            elif line.startswith("👋"):
+                event_type_counts["joins"] = event_type_counts.get("joins", 0) + 1
+
+    # Estimate tokens (~4 chars per token)
+    token_estimate = len(context_str) // 4
+
+    logger.info(
+        f"📋 Context: {len(players)} players, {sum(event_type_counts.values())} events, ~{token_estimate} tokens"
+    )
+    if player_histories:
+        logger.info(f"📚 Player histories: {list(player_histories.keys())}")
+    if event_type_counts:
+        logger.info(f"📊 Event breakdown: {event_type_counts}")
+
+    return context_str if lines else "No context available."

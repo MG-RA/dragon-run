@@ -138,20 +138,20 @@ public class WorldManager {
     private void configureLobbyWorld(World lobby) {
         plugin.getLogger().info("Configuring lobby world: " + lobby.getName());
 
-        lobby.setDifficulty(Difficulty.PEACEFUL);
-        lobby.setGameRule(GameRule.DO_DAYLIGHT_CYCLE, false);
-        lobby.setGameRule(GameRule.DO_WEATHER_CYCLE, false);
-        lobby.setGameRule(GameRule.DO_MOB_SPAWNING, false);
-        lobby.setGameRule(GameRule.DO_FIRE_TICK, false);
+        lobby.setDifficulty(Difficulty.HARD);
+        lobby.setGameRule(GameRule.DO_DAYLIGHT_CYCLE, true);
+        lobby.setGameRule(GameRule.DO_WEATHER_CYCLE, true);
+        lobby.setGameRule(GameRule.DO_MOB_SPAWNING, true);
+        lobby.setGameRule(GameRule.DO_FIRE_TICK, true);
         lobby.setGameRule(GameRule.MOB_GRIEFING, false);
         lobby.setGameRule(GameRule.FALL_DAMAGE, false);
         lobby.setGameRule(GameRule.DROWNING_DAMAGE, false);
         lobby.setGameRule(GameRule.FIRE_DAMAGE, false);
         lobby.setGameRule(GameRule.FREEZE_DAMAGE, false);
         lobby.setGameRule(GameRule.ANNOUNCE_ADVANCEMENTS, false);
-        lobby.setTime(6000); // Noon
-        lobby.setStorm(false);
-        lobby.setThundering(false);
+        //lobby.setTime(6000); // Noon
+        //lobby.setStorm(false);
+        //lobby.setThundering(false);
 
         // Clear any existing mobs
         lobby.getEntities().stream()

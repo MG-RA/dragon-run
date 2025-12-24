@@ -25,13 +25,13 @@ public class LobbyProtectionListener implements Listener {
 
     /**
      * Prevent all damage in lobby.
-     */
+     
     @EventHandler(priority = EventPriority.HIGHEST)
     public void onEntityDamage(EntityDamageEvent event) {
         if (worldManager.isLobbyWorld(event.getEntity().getWorld())) {
             event.setCancelled(true);
         }
-    }
+    }*/
 
     /**
      * Prevent hunger in lobby.
@@ -49,7 +49,7 @@ public class LobbyProtectionListener implements Listener {
 
     /**
      * Prevent ALL creature spawning in lobby (mobs, slimes, etc).
-     */
+     
     @EventHandler(priority = EventPriority.HIGHEST)
     public void onCreatureSpawn(CreatureSpawnEvent event) {
         if (worldManager.isLobbyWorld(event.getEntity().getWorld())) {
@@ -61,5 +61,5 @@ public class LobbyProtectionListener implements Listener {
             // Block all other creatures
             event.setCancelled(true);
         }
-    }
+    }*/
 }
