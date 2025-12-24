@@ -315,8 +315,27 @@ Be dramatic and in-character as {mask.value}!
                 return {"messages": [response], "planned_actions": []}
 
     except Exception as e:
+        # Log the full error for debugging
+        import traceback
         logger.error(f"Error in fast_response: {e}")
-        return {"messages": [], "planned_actions": []}
+        logger.debug(f"Full traceback: {traceback.format_exc()}")
+
+        # Fallback: Generate a simple response without tools
+        fallback_responses = [
+            "Chaos reigns!",
+            "The dragon watches...",
+            "Interesting...",
+            "I see you...",
+            "Very well."
+        ]
+        fallback_msg = random.choice(fallback_responses)
+        logger.info(f"💬 Using fallback response due to error")
+        return {
+            "messages": [],
+            "planned_actions": [
+                {"tool": "broadcast", "args": {"message": f"[Eris] {fallback_msg}"}}
+            ]
+        }
 
 
 async def speak_node(state: ErisState, llm: Any) -> Dict[str, Any]:

@@ -457,6 +457,12 @@ public class WorldManager {
         return player.teleportAsync(spawn).thenApply(success -> {
             if (success) {
                 player.setGameMode(GameMode.SURVIVAL);
+                // Clear inventory for fresh start
+                player.getInventory().clear();
+                // Reset health and food
+                player.setHealth(20.0);
+                player.setFoodLevel(20);
+                player.setSaturation(5.0f);
                 // Reset portal cooldown to allow immediate portal use
                 player.setPortalCooldown(0);
             }

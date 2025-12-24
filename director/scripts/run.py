@@ -96,6 +96,8 @@ async def main():
         keep_alive="30m",
         num_ctx=32768,
         timeout=30.0,
+        # Disable strict JSON formatting to avoid escape sequence errors
+        format="",
     )
 
     # Event processor

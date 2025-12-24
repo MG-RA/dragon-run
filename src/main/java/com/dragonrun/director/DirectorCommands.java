@@ -322,15 +322,17 @@ public class DirectorCommands {
             return 0;
         }
 
-        Location spawnLoc = player.getLocation().add(
-            (Math.random() - 0.5) * 10,
-            0,
-            (Math.random() - 0.5) * 10
-        );
-        spawnLoc.setY(player.getLocation().getY());
+        // Calculate random offset position
+        double offsetX = (Math.random() - 0.5) * 10;
+        double offsetZ = (Math.random() - 0.5) * 10;
+        Location baseLoc = player.getLocation().add(offsetX, 0, offsetZ);
 
         for (int i = 0; i < count; i++) {
-            player.getWorld().spawnEntity(spawnLoc, entityType);
+            // Find safe spawn location (not inside blocks)
+            Location spawnLoc = findSafeSpawnLocation(baseLoc);
+            if (spawnLoc != null) {
+                player.getWorld().spawnEntity(spawnLoc, entityType);
+            }
         }
 
         source.getSender().sendMessage(Component.text("Spawned " + count + " " + mobType + " near " + playerName, NamedTextColor.GREEN));
@@ -394,12 +396,23 @@ public class DirectorCommands {
             return 0;
         }
 
-        Location strikeLoc = player.getLocation().add(
-            (Math.random() - 0.5) * 5,
-            0,
-            (Math.random() - 0.5) * 5
-        );
+        // Lightning has only ~20% chance to be close (within 5 blocks)
+        // Otherwise strikes in a much wider area (up to 20 blocks away)
+        double radius;
+        if (Math.random() < 0.2) {
+            // 20% chance: Close strike (2-5 blocks) - scary but rarely hits
+            radius = 2 + Math.random() * 3;
+        } else {
+            // 80% chance: Far strike (8-20 blocks) - dramatic but safe
+            radius = 8 + Math.random() * 12;
+        }
 
+        // Random angle for more variation
+        double angle = Math.random() * 2 * Math.PI;
+        double offsetX = Math.cos(angle) * radius;
+        double offsetZ = Math.sin(angle) * radius;
+
+        Location strikeLoc = player.getLocation().add(offsetX, 0, offsetZ);
         player.getWorld().strikeLightning(strikeLoc);
 
         source.getSender().sendMessage(Component.text("Lightning struck near " + playerName, NamedTextColor.GREEN));
@@ -409,9 +422,9 @@ public class DirectorCommands {
     private int executeWeather(CommandSourceStack source, String weatherType) {
         String worldName = plugin.getRunManager().getCurrentWorldName();
 
+        // If no active run, use lobby world instead
         if (worldName == null) {
-            source.getSender().sendMessage(Component.text("No active run to change weather in", NamedTextColor.RED));
-            return 0;
+            worldName = "world_lobby";
         }
 
         World world = Bukkit.getWorld(worldName);
@@ -652,5 +665,67 @@ public class DirectorCommands {
         ));
 
         return 1;
+    }
+
+    /**
+     * Find a safe location to spawn mobs without suffocation.
+     * Searches upward and downward from the base location.
+     */
+    private Location findSafeSpawnLocation(Location base) {
+        World world = base.getWorld();
+        int baseX = base.getBlockX();
+        int baseZ = base.getBlockZ();
+
+        // Start from player's Y level and search up and down
+        int startY = base.getBlockY();
+
+        // Try current level and nearby levels (prefer close to player)
+        for (int yOffset = 0; yOffset <= 5; yOffset++) {
+            // Try above first
+            if (startY + yOffset < world.getMaxHeight()) {
+                Location loc = new Location(world, baseX + 0.5, startY + yOffset, baseZ + 0.5);
+                if (isSafeSpawnLocation(loc)) {
+                    return loc;
+                }
+            }
+
+            // Then try below
+            if (yOffset > 0 && startY - yOffset >= world.getMinHeight()) {
+                Location loc = new Location(world, baseX + 0.5, startY - yOffset, baseZ + 0.5);
+                if (isSafeSpawnLocation(loc)) {
+                    return loc;
+                }
+            }
+        }
+
+        // Fallback: use highest solid block at this position
+        int highestY = world.getHighestBlockYAt(baseX, baseZ);
+        return new Location(world, baseX + 0.5, highestY + 1, baseZ + 0.5);
+    }
+
+    /**
+     * Check if a location is safe for mob spawning (feet and head are air).
+     */
+    private boolean isSafeSpawnLocation(Location loc) {
+        World world = loc.getWorld();
+        int x = loc.getBlockX();
+        int y = loc.getBlockY();
+        int z = loc.getBlockZ();
+
+        // Check feet level (must be air)
+        Material feetBlock = world.getBlockAt(x, y, z).getType();
+        if (!feetBlock.isAir()) {
+            return false;
+        }
+
+        // Check head level (must be air)
+        Material headBlock = world.getBlockAt(x, y + 1, z).getType();
+        if (!headBlock.isAir()) {
+            return false;
+        }
+
+        // Check ground below (must be solid, not air/water/lava)
+        Material groundBlock = world.getBlockAt(x, y - 1, z).getType();
+        return groundBlock.isSolid() && groundBlock != Material.LAVA && groundBlock != Material.WATER;
     }
 }
