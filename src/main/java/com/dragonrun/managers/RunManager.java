@@ -5,6 +5,7 @@ import com.dragonrun.database.Database;
 import com.dragonrun.util.MessageUtil;
 import net.kyori.adventure.text.Component;
 import net.kyori.adventure.text.format.NamedTextColor;
+import net.kyori.adventure.text.minimessage.MiniMessage;
 import net.kyori.adventure.title.Title;
 import org.bukkit.Bukkit;
 import org.bukkit.Color;
@@ -127,6 +128,12 @@ public class RunManager {
         if (plugin.getStructureDiscoveryListener() != null) {
             plugin.getStructureDiscoveryListener().resetRunData();
         }
+        if (plugin.getAchievementListener() != null) {
+            plugin.getAchievementListener().clearRunData();
+        }
+
+        // Reset Minecraft advancements for all players
+        resetPlayerAdvancements();
 
         broadcastGeneratingMessage();
 
@@ -277,9 +284,10 @@ public class RunManager {
         }
 
         // Show victory title to all players
+        MiniMessage mm = MiniMessage.miniMessage();
         Title victoryTitle = Title.title(
-                Component.text("VICTORY!", NamedTextColor.GOLD),
-                Component.text(subtitle, NamedTextColor.GREEN),
+                mm.deserialize("<gradient:#FFD700:#FF8C00:#FFD700>✦ <b>VICTORY!</b> ✦</gradient>"),
+                mm.deserialize("<green>" + subtitle),
                 Title.Times.times(Duration.ofMillis(500), Duration.ofSeconds(5), Duration.ofSeconds(2))
         );
 
@@ -477,12 +485,44 @@ public class RunManager {
         }
     }
 
+    // ==================== ADVANCEMENT RESET ====================
+
+    /**
+     * Reset all Minecraft advancements for all online players.
+     * Called at the start of each run so players can re-earn advancements.
+     */
+    private void resetPlayerAdvancements() {
+        int playerCount = 0;
+
+        for (Player player : Bukkit.getOnlinePlayers()) {
+            playerCount++;
+
+            // Iterate through all advancements and revoke them
+            Bukkit.getServer().advancementIterator().forEachRemaining(advancement -> {
+                org.bukkit.advancement.AdvancementProgress progress = player.getAdvancementProgress(advancement);
+
+                // Get awarded criteria as a list to avoid concurrent modification
+                java.util.List<String> awardedCriteria = new java.util.ArrayList<>(progress.getAwardedCriteria());
+
+                // Revoke all awarded criteria for this advancement
+                for (String criteria : awardedCriteria) {
+                    progress.revokeCriteria(criteria);
+                }
+            });
+
+            plugin.getLogger().info("Reset advancements for player: " + player.getName());
+        }
+
+        plugin.getLogger().info("Reset Minecraft advancements for " + playerCount + " players");
+    }
+
     // ==================== BROADCASTS ====================
 
     private void broadcastGeneratingMessage() {
+        MiniMessage mm = MiniMessage.miniMessage();
         Title title = Title.title(
-                Component.text("GENERATING WORLD", NamedTextColor.GOLD),
-                Component.text("Prepare yourself...", NamedTextColor.GRAY),
+                mm.deserialize("<gradient:#FFD700:#FF8C00><b>GENERATING WORLD</b></gradient>"),
+                mm.deserialize("<dark_gray>⚡ <gray>Prepare yourself... <dark_gray>⚡"),
                 Title.Times.times(Duration.ZERO, Duration.ofSeconds(5), Duration.ofMillis(500))
         );
 
@@ -494,9 +534,10 @@ public class RunManager {
     }
 
     private void broadcastRunStartMessage() {
+        MiniMessage mm = MiniMessage.miniMessage();
         Title title = Title.title(
-                Component.text("RUN STARTED!", NamedTextColor.GREEN),
-                Component.text("Kill the dragon. Don't die.", NamedTextColor.WHITE),
+                mm.deserialize("<gradient:#00FF00:#00AA00><b>RUN STARTED!</b></gradient>"),
+                mm.deserialize("<white>Kill the <red><b>dragon</b></red>. <gray>Don't <dark_red>die</dark_red>."),
                 Title.Times.times(Duration.ZERO, Duration.ofSeconds(3), Duration.ofMillis(500))
         );
 

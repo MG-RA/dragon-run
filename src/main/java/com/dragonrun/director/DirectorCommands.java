@@ -5,6 +5,8 @@ import com.mojang.brigadier.arguments.IntegerArgumentType;
 import com.mojang.brigadier.arguments.StringArgumentType;
 import io.papermc.paper.command.brigadier.CommandSourceStack;
 import io.papermc.paper.command.brigadier.Commands;
+import net.kyori.adventure.key.Key;
+import net.kyori.adventure.sound.Sound;
 import net.kyori.adventure.text.Component;
 import net.kyori.adventure.text.format.NamedTextColor;
 import net.kyori.adventure.text.minimessage.MiniMessage;
@@ -442,25 +444,39 @@ public class DirectorCommands {
             return 0;
         }
 
+        int duration = 0;
         switch (weatherType.toLowerCase()) {
             case "clear":
                 world.setStorm(false);
                 world.setThundering(false);
+                world.setWeatherDuration(0); // Clear indefinitely
                 break;
             case "rain":
                 world.setStorm(true);
                 world.setThundering(false);
+                // Rain lasts 30-90 seconds (600-1800 ticks)
+                duration = 600 + (int)(Math.random() * 1200);
+                world.setWeatherDuration(duration);
                 break;
             case "thunder":
                 world.setStorm(true);
                 world.setThundering(true);
+                // Thunder lasts 20-60 seconds (400-1200 ticks) - shorter and more dramatic
+                duration = 400 + (int)(Math.random() * 800);
+                world.setWeatherDuration(duration);
+                world.setThunderDuration(duration);
                 break;
             default:
                 source.getSender().sendMessage(Component.text("Invalid weather type: " + weatherType, NamedTextColor.RED));
                 return 0;
         }
 
-        source.getSender().sendMessage(Component.text("Weather set to " + weatherType, NamedTextColor.GREEN));
+        if (duration > 0) {
+            int seconds = duration / 20;
+            source.getSender().sendMessage(Component.text("Weather set to " + weatherType + " for " + seconds + " seconds", NamedTextColor.GREEN));
+        } else {
+            source.getSender().sendMessage(Component.text("Weather set to " + weatherType, NamedTextColor.GREEN));
+        }
         return 1;
     }
 
@@ -576,9 +592,20 @@ public class DirectorCommands {
     }
 
     private int executePlaySound(CommandSourceStack source, String sound, String target, float volume, float pitch) {
+        // Parse sound key - handle both "minecraft:sound" and "sound" formats
+        Key soundKey;
+        if (sound.contains(":")) {
+            soundKey = Key.key(sound);
+        } else {
+            soundKey = Key.key("minecraft", sound);
+        }
+
+        // Create Adventure Sound with proper volume and pitch
+        Sound adventureSound = Sound.sound(soundKey, Sound.Source.MASTER, volume, pitch);
+
         if ("@a".equals(target)) {
             for (Player player : Bukkit.getOnlinePlayers()) {
-                player.playSound(player.getLocation(), sound, volume, pitch);
+                player.playSound(adventureSound, player.getLocation().x(), player.getLocation().y(), player.getLocation().z());
             }
             source.getSender().sendMessage(Component.text("Played sound to all players", NamedTextColor.GREEN));
         } else {
@@ -587,7 +614,7 @@ public class DirectorCommands {
                 source.getSender().sendMessage(Component.text("Player not found: " + target, NamedTextColor.RED));
                 return 0;
             }
-            player.playSound(player.getLocation(), sound, volume, pitch);
+            player.playSound(adventureSound, player.getLocation().x(), player.getLocation().y(), player.getLocation().z());
             source.getSender().sendMessage(Component.text("Played sound to " + target, NamedTextColor.GREEN));
         }
         return 1;
@@ -600,8 +627,10 @@ public class DirectorCommands {
             return 0;
         }
 
-        Component title = titleText.isEmpty() ? Component.empty() : Component.text(titleText);
-        Component subtitle = subtitleText.isEmpty() ? Component.empty() : Component.text(subtitleText);
+        // Parse MiniMessage formatting for both title and subtitle
+        MiniMessage miniMessage = MiniMessage.miniMessage();
+        Component title = titleText.isEmpty() ? Component.empty() : miniMessage.deserialize(titleText);
+        Component subtitle = subtitleText.isEmpty() ? Component.empty() : miniMessage.deserialize(subtitleText);
 
         player.showTitle(net.kyori.adventure.title.Title.title(
             title,

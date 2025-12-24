@@ -5,9 +5,11 @@ import com.dragonrun.util.TimeUtil;
 import net.kyori.adventure.text.Component;
 import net.kyori.adventure.text.format.NamedTextColor;
 import net.kyori.adventure.text.format.TextDecoration;
+import net.kyori.adventure.text.minimessage.MiniMessage;
 import org.bukkit.Bukkit;
 import org.bukkit.entity.Player;
 import org.bukkit.scoreboard.*;
+import io.papermc.paper.scoreboard.numbers.NumberFormat;
 
 import java.util.UUID;
 
@@ -24,12 +26,20 @@ public class ScoreboardManager {
      */
     public void setScoreboard(Player player) {
         Scoreboard scoreboard = Bukkit.getScoreboardManager().getNewScoreboard();
+
+        // Use MiniMessage for the title
+        MiniMessage mm = MiniMessage.miniMessage();
+        Component title = mm.deserialize("<gradient:#FF5555:#AA0000><b>DRAGON RUN</b></gradient>");
+
         Objective objective = scoreboard.registerNewObjective(
                 "dragonrun",
                 Criteria.DUMMY,
-                Component.text("DRAGON RUN", NamedTextColor.GOLD, TextDecoration.BOLD)
+                title
         );
         objective.setDisplaySlot(DisplaySlot.SIDEBAR);
+
+        // Hide the score numbers on the right side using blank number format
+        objective.numberFormat(NumberFormat.blank());
 
         player.setScoreboard(scoreboard);
         updateScoreboard(player);
@@ -68,27 +78,71 @@ public class ScoreboardManager {
             int required = plugin.getVoteManager().getRequiredVotes();
             int lobbyPlayers = plugin.getWorldManager().getLobbyPlayerCount();
 
-            setScore(objective, "§e§lLOBBY", line--);
-            setScore(objective, "§7Players: §a" + lobbyPlayers, line--);
-            setScore(objective, "§7Votes: §b" + votes + "§7/§b" + required, line--);
-            setScore(objective, "§7Use §a/vote §7to start!", line--);
+            setScoreComponent(objective, Component.text("LOBBY", NamedTextColor.YELLOW, TextDecoration.BOLD), line--);
+            setScoreComponent(objective,
+                Component.text()
+                    .append(Component.text("Players: ", NamedTextColor.GRAY))
+                    .append(Component.text(lobbyPlayers, NamedTextColor.GREEN))
+                    .build(), line--);
+            setScoreComponent(objective,
+                Component.text()
+                    .append(Component.text("Votes: ", NamedTextColor.GRAY))
+                    .append(Component.text(votes, NamedTextColor.AQUA))
+                    .append(Component.text("/", NamedTextColor.GRAY))
+                    .append(Component.text(required, NamedTextColor.AQUA))
+                    .build(), line--);
+            setScoreComponent(objective,
+                Component.text()
+                    .append(Component.text("Use ", NamedTextColor.GRAY))
+                    .append(Component.text("/vote", NamedTextColor.GREEN))
+                    .append(Component.text(" to start!", NamedTextColor.GRAY))
+                    .build(), line--);
         } else if (state == GameState.GENERATING) {
-            setScore(objective, "§6§lGENERATING...", line--);
-            setScore(objective, "§7Creating world...", line--);
+            setScoreComponent(objective, Component.text("GENERATING...", NamedTextColor.GOLD, TextDecoration.BOLD), line--);
+            setScoreComponent(objective, Component.text("Creating world...", NamedTextColor.GRAY), line--);
             setScore(objective, "  ", line--);
             setScore(objective, "   ", line--);
         } else if (state == GameState.ACTIVE) {
             // Active run
             int runId = plugin.getRunManager().getCurrentRunId();
             long runDuration = plugin.getRunManager().getRunDurationSeconds();
+            boolean dragonAlive = plugin.getRunManager().isDragonAlive();
 
-            setScore(objective, "§b§lRun #" + runId, line--);
-            setScore(objective, "§7Duration: §f" + TimeUtil.formatDuration(runDuration), line--);
-            setScore(objective, "§7Players: §a" + plugin.getWorldManager().getHardcorePlayerCount(), line--);
+            setScoreComponent(objective,
+                Component.text()
+                    .append(Component.text("Run #" + runId, NamedTextColor.AQUA, TextDecoration.BOLD))
+                    .build(), line--);
+            setScoreComponent(objective,
+                Component.text()
+                    .append(Component.text("⏱ ", NamedTextColor.DARK_GRAY))
+                    .append(Component.text(TimeUtil.formatDuration(runDuration), NamedTextColor.WHITE))
+                    .build(), line--);
+            setScoreComponent(objective,
+                Component.text()
+                    .append(Component.text("Players: ", NamedTextColor.GRAY))
+                    .append(Component.text(plugin.getWorldManager().getHardcorePlayerCount(), NamedTextColor.GREEN))
+                    .build(), line--);
+
+            // Dragon status
+            if (dragonAlive) {
+                setScoreComponent(objective,
+                    Component.text()
+                        .append(Component.text("🐉 ", NamedTextColor.DARK_PURPLE))
+                        .append(Component.text("Dragon ", NamedTextColor.DARK_PURPLE))
+                        .append(Component.text("Alive", NamedTextColor.RED, TextDecoration.BOLD))
+                        .build(), line--);
+            } else {
+                setScoreComponent(objective,
+                    Component.text()
+                        .append(Component.text("🐉 ", NamedTextColor.GRAY))
+                        .append(Component.text("Dragon ", NamedTextColor.GRAY))
+                        .append(Component.text("Dead", NamedTextColor.GREEN, TextDecoration.BOLD))
+                        .build(), line--);
+            }
             setScore(objective, "  ", line--);
         } else if (state == GameState.RESETTING) {
-            setScore(objective, "§c§lRESETTING...", line--);
-            setScore(objective, "§7Returning to lobby...", line--);
+            setScoreComponent(objective, Component.text("RESETTING...", NamedTextColor.RED, TextDecoration.BOLD), line--);
+            setScoreComponent(objective, Component.text("Returning to lobby...", NamedTextColor.GRAY), line--);
             setScore(objective, "  ", line--);
             setScore(objective, "   ", line--);
         }
@@ -97,16 +151,29 @@ public class ScoreboardManager {
         setScore(objective, "    ", line--);
 
         // Your stats
-        setScore(objective, "§d§lYour Stats", line--);
-        String auraColor = aura >= 0 ? "§d" : "§c";
-        setScore(objective, "§7Aura: " + auraColor + aura, line--);
-        setScore(objective, "§7Achievements: §e" + achievements + "§8/§7" + totalAchievements, line--);
+        setScoreComponent(objective,
+            Component.text("Your Stats", NamedTextColor.LIGHT_PURPLE, TextDecoration.BOLD), line--);
+
+        NamedTextColor auraColor = aura >= 0 ? NamedTextColor.LIGHT_PURPLE : NamedTextColor.RED;
+        setScoreComponent(objective,
+            Component.text()
+                .append(Component.text("Aura: ", NamedTextColor.GRAY))
+                .append(Component.text(aura, auraColor))
+                .build(), line--);
+
+        setScoreComponent(objective,
+            Component.text()
+                .append(Component.text("Achievements: ", NamedTextColor.GRAY))
+                .append(Component.text(achievements, NamedTextColor.YELLOW))
+                .append(Component.text("/", NamedTextColor.DARK_GRAY))
+                .append(Component.text(totalAchievements, NamedTextColor.GRAY))
+                .build(), line--);
 
         // Blank line
         setScore(objective, "     ", line--);
 
         // Server
-        setScore(objective, "§8dragonrun.server", line--);
+        setScoreComponent(objective, Component.text("dragonrun.server", NamedTextColor.DARK_GRAY), line--);
     }
 
     /**
@@ -147,6 +214,17 @@ public class ScoreboardManager {
 
     private void setScore(Objective objective, String text, int score) {
         Score s = objective.getScore(text);
+        s.setScore(score);
+    }
+
+    /**
+     * Set a scoreboard line using a Component (supports modern formatting)
+     */
+    private void setScoreComponent(Objective objective, Component component, int score) {
+        // Convert Component to legacy string for scoreboard entry
+        // Scoreboard entries need a unique string key, so we use a combination of score and hash
+        String entry = net.kyori.adventure.text.serializer.legacy.LegacyComponentSerializer.legacySection().serialize(component);
+        Score s = objective.getScore(entry);
         s.setScore(score);
     }
 }

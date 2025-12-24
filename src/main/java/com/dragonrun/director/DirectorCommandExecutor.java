@@ -5,22 +5,33 @@ import com.google.gson.JsonObject;
 import org.bukkit.Bukkit;
 
 import java.util.function.Consumer;
+import java.util.concurrent.atomic.AtomicInteger;
 
 /**
  * Executes director commands received via WebSocket.
  */
 public class DirectorCommandExecutor {
 
+    // Track how many commands are queued to spread them across ticks
+    private static final AtomicInteger queuedCommands = new AtomicInteger(0);
+
     /**
      * Execute a command from the Director AI.
+     * Commands are spread across multiple ticks to prevent server freezing.
      *
      * @param plugin The plugin instance
      * @param commandJson The command JSON from director
      * @param callback Callback with execution result
      */
     public static void execute(DragonRunPlugin plugin, JsonObject commandJson, Consumer<CommandResult> callback) {
-        // Run on main server thread for thread safety
-        Bukkit.getScheduler().runTask(plugin, () -> {
+        // Spread commands across ticks to prevent server freezing when Eris sends multiple actions
+        // Each subsequent command gets a 1-tick delay (50ms)
+        long delay = queuedCommands.getAndIncrement();
+
+        // Run on main server thread for thread safety, but spread across ticks
+        Bukkit.getScheduler().runTaskLater(plugin, () -> {
+            // Decrement counter when command executes
+            queuedCommands.decrementAndGet();
             try {
                 String command = commandJson.get("command").getAsString();
                 JsonObject params = commandJson.has("parameters")
@@ -53,7 +64,7 @@ public class DirectorCommandExecutor {
                 callback.accept(new CommandResult(false, "Error: " + e.getMessage()));
                 plugin.getLogger().warning("Director command execution error: " + e.getMessage());
             }
-        });
+        }, delay);
     }
 
     /**

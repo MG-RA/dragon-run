@@ -6,6 +6,7 @@ import com.dragonrun.commands.StatsCommand;
 import com.dragonrun.commands.BetCommand;
 import com.dragonrun.commands.LiveCommand;
 import com.dragonrun.commands.VoteCommand;
+import com.dragonrun.commands.NicknameCommand;
 import com.dragonrun.database.Database;
 import com.dragonrun.listeners.AchievementListener;
 import com.dragonrun.listeners.DeathListener;
@@ -217,6 +218,7 @@ public class DragonRunPlugin extends JavaPlugin {
             new BetCommand(this).register(commands);
             new LiveCommand(this).register(commands);
             new VoteCommand(this).register(commands);
+            new NicknameCommand(this).register(commands);
             new com.dragonrun.director.DirectorCommands(this).register(commands);
         });
     }

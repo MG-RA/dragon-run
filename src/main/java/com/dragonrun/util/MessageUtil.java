@@ -4,6 +4,7 @@ import net.kyori.adventure.text.Component;
 import net.kyori.adventure.text.format.NamedTextColor;
 import net.kyori.adventure.text.format.TextColor;
 import net.kyori.adventure.text.format.TextDecoration;
+import net.kyori.adventure.text.minimessage.MiniMessage;
 
 public final class MessageUtil {
 
@@ -37,13 +38,13 @@ public final class MessageUtil {
      * Aura change notification for a player
      */
     public static Component auraChange(int amount, String reason) {
-        TextColor color = amount >= 0 ? POSITIVE_COLOR : NEGATIVE_COLOR;
+        MiniMessage mm = MiniMessage.miniMessage();
         String sign = amount >= 0 ? "+" : "";
+        String color = amount >= 0 ? "<green>" : "<red>";
 
         return Component.text()
                 .append(PREFIX)
-                .append(Component.text(sign + amount + " aura ", color))
-                .append(Component.text("(" + reason + ")", NamedTextColor.GRAY))
+                .append(mm.deserialize(color + "<b>" + sign + amount + "</b> <dark_purple>aura</dark_purple> <gray>(" + reason + ")"))
                 .build();
     }
 
@@ -51,12 +52,10 @@ public final class MessageUtil {
      * Broadcast message for significant aura gain
      */
     public static Component auraBroadcastGain(String playerName, int amount, String reason) {
+        MiniMessage mm = MiniMessage.miniMessage();
         return Component.text()
                 .append(PREFIX)
-                .append(Component.text(playerName, NamedTextColor.WHITE))
-                .append(Component.text(" gained ", NamedTextColor.GRAY))
-                .append(Component.text("+" + amount + " aura", POSITIVE_COLOR, TextDecoration.BOLD))
-                .append(Component.text(" (" + reason + ")", NamedTextColor.GRAY))
+                .append(mm.deserialize("<white>" + playerName + "</white> <gray>gained</gray> <green><b>+" + amount + "</b></green> <dark_purple>aura</dark_purple> <gray>(" + reason + ")"))
                 .build();
     }
 
@@ -64,12 +63,10 @@ public final class MessageUtil {
      * Broadcast message for significant aura loss
      */
     public static Component auraBroadcastLoss(String playerName, int amount, String reason) {
+        MiniMessage mm = MiniMessage.miniMessage();
         return Component.text()
                 .append(PREFIX)
-                .append(Component.text(playerName, NamedTextColor.WHITE))
-                .append(Component.text(" lost ", NamedTextColor.GRAY))
-                .append(Component.text("-" + amount + " aura", NEGATIVE_COLOR, TextDecoration.BOLD))
-                .append(Component.text(" (" + reason + ")", NamedTextColor.GRAY))
+                .append(mm.deserialize("<white>" + playerName + "</white> <gray>lost</gray> <red><b>-" + amount + "</b></red> <dark_purple>aura</dark_purple> <gray>(" + reason + ")"))
                 .build();
     }
 
