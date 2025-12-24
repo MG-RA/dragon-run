@@ -28,6 +28,9 @@ dependencies {
 
     // WebSocket (for future phases)
     implementation 'org.java-websocket:Java-WebSocket:1.5.6'
+
+    // MiniMessage for text formatting
+    implementation 'net.kyori:adventure-text-minimessage:4.17.0'
 }
 
 tasks.named('assemble') {

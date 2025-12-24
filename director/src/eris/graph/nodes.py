@@ -27,14 +27,27 @@ async def event_classifier(state: ErisState) -> Dict[str, Any]:
     event_type = event.get("eventType", "")
 
     priority_map = {
+        # Critical - always speak
         "player_death": EventPriority.CRITICAL,
+        "player_death_detailed": EventPriority.CRITICAL,
         "dragon_killed": EventPriority.CRITICAL,
+        # High - usually speak
         "player_chat": EventPriority.HIGH,
         "player_damaged": EventPriority.HIGH,
+        # Medium - speak if interesting
         "dimension_change": EventPriority.MEDIUM,
+        "player_dimension_change": EventPriority.MEDIUM,
         "resource_milestone": EventPriority.MEDIUM,
+        "advancement_made": EventPriority.MEDIUM,  # Vanilla MC advancements
+        "achievement_unlocked": EventPriority.MEDIUM,  # Custom DR achievements
+        "structure_discovered": EventPriority.MEDIUM,  # Found fortress, stronghold, etc.
+        "player_joined": EventPriority.MEDIUM,
+        "run_starting": EventPriority.MEDIUM,
         "run_started": EventPriority.MEDIUM,
         "run_ended": EventPriority.MEDIUM,
+        "boss_killed": EventPriority.MEDIUM,  # Wither, Elder Guardian, Warden
+        # Low - rarely speak
+        "mob_kills_batch": EventPriority.LOW,
         "state": EventPriority.LOW,
     }
 
@@ -43,6 +56,11 @@ async def event_classifier(state: ErisState) -> Dict[str, Any]:
     # Upgrade priority for close calls
     if event_type == "player_damaged":
         if event.get("data", {}).get("isCloseCall"):
+            priority = EventPriority.HIGH
+
+    # Upgrade priority for critical advancements (entering nether/end, getting blaze rods, etc.)
+    if event_type == "advancement_made":
+        if event.get("data", {}).get("isCritical"):
             priority = EventPriority.HIGH
 
     return {"event_priority": priority}
@@ -115,17 +133,32 @@ async def mask_selector(state: ErisState) -> Dict[str, Any]:
     if random.random() > mask_stability:
         # Context-aware mask selection
         event_type = event.get("eventType", "") if event else ""
+        event_data = event.get("data", {}) if event else {}
 
         if event_type == "player_death":
             mask = random.choice([ErisMask.PROPHET, ErisMask.CHAOS_BRINGER])
         elif event_type == "player_chat":
             mask = random.choice([ErisMask.TRICKSTER, ErisMask.FRIEND, ErisMask.GAMBLER])
-        elif "milestone" in event_type:
-            mask = random.choice([ErisMask.TRICKSTER, ErisMask.FRIEND])
+        elif event_type in ("resource_milestone", "advancement_made", "structure_discovered"):
+            # For progression events, be encouraging or ominous
+            if event_data.get("isCritical"):
+                mask = random.choice([ErisMask.PROPHET, ErisMask.CHAOS_BRINGER, ErisMask.GAMBLER])
+            else:
+                mask = random.choice([ErisMask.TRICKSTER, ErisMask.FRIEND, ErisMask.OBSERVER])
+        elif event_type == "achievement_unlocked":
+            # For achievements, respond based on category
+            if event_data.get("category") == "negative":
+                mask = random.choice([ErisMask.CHAOS_BRINGER, ErisMask.TRICKSTER])
+            else:
+                mask = random.choice([ErisMask.FRIEND, ErisMask.GAMBLER, ErisMask.TRICKSTER])
         elif event_type == "dragon_killed":
             mask = random.choice(
                 [ErisMask.CHAOS_BRINGER, ErisMask.TRICKSTER, ErisMask.OBSERVER]
             )
+        elif event_type in ("run_starting", "run_started"):
+            mask = random.choice([ErisMask.PROPHET, ErisMask.CHAOS_BRINGER, ErisMask.GAMBLER])
+        elif event_type == "player_joined":
+            mask = random.choice([ErisMask.TRICKSTER, ErisMask.FRIEND, ErisMask.GAMBLER])
         else:
             mask = random.choice(list(ErisMask))
 
@@ -174,11 +207,39 @@ async def decision_node(state: ErisState, llm: Any) -> Dict[str, Any]:
     elif event_type == "dragon_killed":
         event_guidance = "\n⚡ THE DRAGON IS SLAIN! You MUST react to this incredible achievement!"
         force_speak = True
-    elif event_type == "dimension_change":
+    elif event_type in ("dimension_change", "player_dimension_change"):
         event_guidance = "\n⚡ A player changed dimensions! This is a milestone worth commenting on."
         force_speak = True
     elif event_type == "run_ended":
         event_guidance = "\n⚡ The run has ended! Comment on how it went."
+        force_speak = True
+    elif event_type == "advancement_made":
+        adv_name = event_data.get("advancementName", "an advancement")
+        is_critical = event_data.get("isCritical", False)
+        if is_critical:
+            event_guidance = f"\n⚡ CRITICAL MILESTONE! Player achieved '{adv_name}' - this is HUGE for their speedrun progress! Comment on it!"
+            force_speak = True
+        else:
+            event_guidance = f"\n📜 Player achieved '{adv_name}'. Consider commenting if it's interesting or dramatic."
+    elif event_type == "achievement_unlocked":
+        ach_name = event_data.get("name", "an achievement")
+        category = event_data.get("category", "positive")
+        if category == "negative":
+            event_guidance = f"\n😈 SHAME achievement unlocked: '{ach_name}'! Mock them mercilessly!"
+            force_speak = True
+        else:
+            event_guidance = f"\n🏆 Achievement unlocked: '{ach_name}'. Acknowledge their progress."
+            force_speak = True
+    elif event_type == "structure_discovered":
+        structure = event_data.get("structure", "a structure")
+        event_guidance = f"\n🏛️ Player discovered {structure}! This is a key speedrun milestone."
+        force_speak = True
+    elif event_type == "resource_milestone":
+        resource = event_data.get("resource", event_data.get("item", "a resource"))
+        event_guidance = f"\n📦 Resource milestone: {resource}! Their journey progresses..."
+    elif event_type == "boss_killed":
+        boss = event_data.get("boss", "a boss")
+        event_guidance = f"\n💀 A mighty {boss} has been slain! This deserves recognition!"
         force_speak = True
 
     logger.info(f"🔍 Event '{event_type}' -> force_speak={force_speak}")
@@ -282,6 +343,14 @@ RULES:
 2. If the player asks for an action (lightning, weather, mobs, etc.) - DO IT with the appropriate tool
 3. You can use multiple tools at once - broadcast AND take action!
 4. ONLY reference player names from the CURRENT PLAYERS list above - do NOT invent names!
+5. ⚠️ NEVER start your message with "ERIS:", "[Eris]", "<b>ERIS:</b>" or any prefix! The system adds "[Eris]" automatically. Just start with your actual message!
+
+⚠️ TEXT FORMATTING - CRITICAL:
+Use MiniMessage tags ONLY! NEVER use Markdown!
+- CORRECT: <b>bold</b>, <i>italic</i>, <dark_purple>purple</dark_purple>, <gold>gold</gold>
+- WRONG: **bold**, *italic* (these will display as raw text!)
+- WRONG: Starting with "ERIS:" or any name prefix!
+Example: "The <dark_purple>void</dark_purple> <i>whispers</i>..." (NOT "<b>ERIS:</b> The void...")
 
 Be dramatic and in-character as {mask.value}!
 """
@@ -591,6 +660,14 @@ def _build_context(state: ErisState) -> str:
                 event_type_counts["milestones"] = event_type_counts.get("milestones", 0) + 1
             elif line.startswith("👋"):
                 event_type_counts["joins"] = event_type_counts.get("joins", 0) + 1
+            elif line.startswith("⭐") or line.startswith("📜"):
+                event_type_counts["advancements"] = event_type_counts.get("advancements", 0) + 1
+            elif line.startswith("🏅"):
+                event_type_counts["achievements"] = event_type_counts.get("achievements", 0) + 1
+            elif line.startswith("🎯") or line.startswith("🏰") or line.startswith("📍"):
+                event_type_counts["structures"] = event_type_counts.get("structures", 0) + 1
+            elif line.startswith("🏆"):
+                event_type_counts["boss_kills"] = event_type_counts.get("boss_kills", 0) + 1
 
     # Estimate tokens (~4 chars per token)
     token_estimate = len(context_str) // 4

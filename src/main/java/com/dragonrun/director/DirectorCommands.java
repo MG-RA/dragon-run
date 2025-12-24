@@ -7,6 +7,7 @@ import io.papermc.paper.command.brigadier.CommandSourceStack;
 import io.papermc.paper.command.brigadier.Commands;
 import net.kyori.adventure.text.Component;
 import net.kyori.adventure.text.format.NamedTextColor;
+import net.kyori.adventure.text.minimessage.MiniMessage;
 import org.bukkit.Bukkit;
 import org.bukkit.Color;
 import org.bukkit.FireworkEffect;
@@ -281,8 +282,12 @@ public class DirectorCommands {
     }
 
     private int executeBroadcast(CommandSourceStack source, String message) {
+        // Parse MiniMessage formatting tags
+        MiniMessage miniMessage = MiniMessage.miniMessage();
+        Component messageComponent = miniMessage.deserialize(message);
+
         Component broadcastMessage = Component.text("[Eris] ", NamedTextColor.LIGHT_PURPLE)
-            .append(Component.text(message, NamedTextColor.WHITE));
+            .append(messageComponent);
 
         Bukkit.broadcast(broadcastMessage);
         return 1;
@@ -295,8 +300,12 @@ public class DirectorCommands {
             return 0;
         }
 
+        // Parse MiniMessage formatting tags
+        MiniMessage miniMessage = MiniMessage.miniMessage();
+        Component messageComponent = miniMessage.deserialize(message);
+
         Component playerMessage = Component.text("[Eris] ", NamedTextColor.LIGHT_PURPLE)
-            .append(Component.text(message, NamedTextColor.WHITE));
+            .append(messageComponent);
 
         player.sendMessage(playerMessage);
         return 1;
