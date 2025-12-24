@@ -103,20 +103,23 @@ async def main():
     async def on_state_update(data: dict):
         """Handle game state updates."""
         nonlocal current_game_state
-        current_game_state = data.get("data", {})
-        short_memory.add_event({"eventType": "state", "data": current_game_state})
-        logger.debug(f"📊 State update received")
+        # State messages have fields at root level (players, gameState, etc.)
+        # NOT nested under a "data" key like events are
+        current_game_state = data
+        # Log player count for debugging
+        players = data.get("players", [])
+        player_names = [p.get("username", "?") for p in players]
+        logger.debug(f"📊 State update: {len(players)} players online: {player_names}")
 
     async def on_event(data: dict):
         """Handle game events."""
         # eventType is at root level, data contains the payload
         event_type = data.get("eventType", "unknown")
-        event_payload = data.get("data", {})
 
-        # Combine into a single event structure for processing
+        # Keep the original structure - nodes expect data nested under "data" key
         event_data = {
             "eventType": event_type,
-            **event_payload
+            "data": data.get("data", {})
         }
 
         logger.info(f"📬 Event: {event_type}")

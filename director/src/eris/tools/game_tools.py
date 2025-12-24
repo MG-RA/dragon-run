@@ -87,7 +87,7 @@ def create_game_tools(ws_client: "GameStateClient") -> List:
         """Strike lightning near a player for dramatic effect."""
         logger.info(f"🔧 Tool: strike_lightning(player={player})")
         await ws_client.send_command(
-            "lightning", {"player": player}, reason="Eris Lightning"
+            "lightning", {"nearPlayer": player}, reason="Eris Lightning"
         )
         return f"Lightning struck near {player}."
 
@@ -96,7 +96,7 @@ def create_game_tools(ws_client: "GameStateClient") -> List:
         """Change the weather conditions in the world."""
         logger.info(f"🔧 Tool: change_weather(type={weather_type})")
         await ws_client.send_command(
-            "weather", {"weatherType": weather_type}, reason="Eris Weather Control"
+            "weather", {"type": weather_type}, reason="Eris Weather Control"
         )
         return f"Weather changed to {weather_type}."
 
@@ -105,7 +105,7 @@ def create_game_tools(ws_client: "GameStateClient") -> List:
         """Launch fireworks near a player for celebrations."""
         logger.info(f"🔧 Tool: launch_firework(player={player}, count={count})")
         await ws_client.send_command(
-            "firework", {"player": player, "count": count}, reason="Eris Celebration"
+            "firework", {"nearPlayer": player, "count": count}, reason="Eris Celebration"
         )
         return f"Launched {count} fireworks near {player}."
 

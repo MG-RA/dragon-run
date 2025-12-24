@@ -122,9 +122,43 @@ async def decision_node(state: ErisState, llm: Any) -> Dict[str, Any]:
 
     # Decision prompt
     event = state["current_event"]
+    event_type = event.get("eventType", "unknown") if event else "unknown"
+    event_data = event.get("data", {}) if event else {}
+
+    # Event-specific guidance and forced actions for important events
+    event_guidance = ""
+    force_speak = False  # Override LLM decision for critical events
+    force_intervene = False
+
+    logger.debug(f"🔍 Decision node processing event_type: '{event_type}'")
+
+    if event_type == "run_starting":
+        event_guidance = "\n⚡ A NEW RUN IS STARTING! This is a MAJOR moment - you MUST speak to set the tone!"
+        force_speak = True
+    elif event_type == "run_started":
+        event_guidance = "\n⚡ THE RUN HAS BEGUN! You should speak and maybe set the mood with weather!"
+        force_speak = True
+    elif event_type == "player_joined":
+        event_guidance = "\n⚡ A player has joined! Greet them with your characteristic chaos!"
+        force_speak = True
+    elif event_type in ("player_death", "player_death_detailed"):
+        event_guidance = "\n⚡ DEATH! You MUST speak. This is YOUR moment - be dramatic!"
+        force_speak = True
+    elif event_type == "dragon_killed":
+        event_guidance = "\n⚡ THE DRAGON IS SLAIN! You MUST react to this incredible achievement!"
+        force_speak = True
+    elif event_type == "dimension_change":
+        event_guidance = "\n⚡ A player changed dimensions! This is a milestone worth commenting on."
+    elif event_type == "run_ended":
+        event_guidance = "\n⚡ The run has ended! Comment on how it went."
+        force_speak = True
+
+    logger.info(f"🔍 Event '{event_type}' -> force_speak={force_speak}")
+
     decision_prompt = f"""
-Current Event: {event.get('eventType', 'unknown')}
-Event Data: {event.get('data', {})}
+Current Event: {event_type}
+Event Data: {event_data}
+{event_guidance}
 
 Analyze this situation and decide:
 1. Should you SPEAK? (broadcast to all or message specific player)
@@ -145,11 +179,12 @@ ACTION: [brief description of what to do]
 
         # Parse response
         content = response.content
-        should_speak = "speak: yes" in content.lower()
-        should_intervene = "intervention: yes" in content.lower()
+        should_speak = "speak: yes" in content.lower() or force_speak
+        should_intervene = "intervention: yes" in content.lower() or force_intervene
 
         logger.info(
             f"🎯 Decision: speak={should_speak}, intervene={should_intervene}, mask={state['current_mask'].value}"
+            + (f" (forced)" if force_speak or force_intervene else "")
         )
 
         return {
@@ -166,10 +201,10 @@ ACTION: [brief description of what to do]
         }
 
 
-async def fast_response(state: ErisState, llm: Any) -> Dict[str, Any]:
+async def fast_response(state: ErisState, llm_with_tools: Any) -> Dict[str, Any]:
     """
-    Fast path for chat responses - prioritizes latency.
-    Simpler prompt, immediate response.
+    Fast path for chat responses - now with tool calling support!
+    Can respond to chat AND take actions like spawning mobs, changing weather, etc.
     """
     from langchain_core.messages import AIMessage
 
@@ -177,23 +212,83 @@ async def fast_response(state: ErisState, llm: Any) -> Dict[str, Any]:
     chat_data = event.get("data", {})
     player = chat_data.get("player", "Unknown")
     message = chat_data.get("message", "")
+    mask = state.get("current_mask", ErisMask.TRICKSTER)
 
-    prompt = build_fast_chat_prompt(state["current_mask"], player, message)
+    # Build context for better responses
+    context_str = _build_context(state)
+
+    # Get the actual player list to prevent hallucination
+    game_state = state.get("game_state", {})
+    players = game_state.get("players", [])
+    player_names = [p.get("username", "Unknown") for p in players if p.get("username")]
+
+    if player_names:
+        player_list_str = ", ".join(player_names)
+        player_instruction = f"\n\nCURRENT PLAYERS (ONLY use these names): {player_list_str}"
+    else:
+        player_instruction = ""
+
+    # Enhanced prompt that REQUIRES tool usage for responses
+    prompt = f"""You are ERIS, the chaotic AI Director of Dragon Run ({mask.value} mask).
+
+CONTEXT:
+{context_str}
+{player_instruction}
+
+Player "{player}" just said: "{message}"
+
+IMPORTANT: You MUST use the broadcast tool to respond! Do not just write text - use the tool!
+
+Available tools:
+- broadcast: Send a message to all players (USE THIS TO RESPOND!)
+- message_player: Whisper to a specific player
+- spawn_mob: Spawn zombies, skeletons, spiders, creepers, or endermen near a player
+- give_item: Give items to a player
+- apply_effect: Apply potion effects (speed, strength, slowness, poison, etc.)
+- strike_lightning: Strike lightning near a player
+- change_weather: Change to clear, rain, or thunder
+- launch_firework: Launch celebratory fireworks
+
+RULES:
+1. ALWAYS use the broadcast tool to send your response (1-3 sentences, in character)
+2. If the player asks for an action (lightning, weather, mobs, etc.) - DO IT with the appropriate tool
+3. You can use multiple tools at once - broadcast AND take action!
+4. ONLY reference player names from the CURRENT PLAYERS list above - do NOT invent names!
+
+Be dramatic and in-character as {mask.value}!
+"""
 
     try:
-        response = await llm.ainvoke([HumanMessage(content=prompt)])
+        response = await llm_with_tools.ainvoke([HumanMessage(content=prompt)])
 
-        logger.info(f"💬 Fast chat response to {player}")
+        # Check if LLM made tool calls
+        if hasattr(response, "tool_calls") and response.tool_calls:
+            logger.info(f"💬 Fast chat response to {player} with {len(response.tool_calls)} tool calls")
+            for tc in response.tool_calls:
+                logger.info(f"   -> {tc['name']}: {tc['args']}")
+            return {
+                "messages": [response],
+                "planned_actions": [],
+            }
+        else:
+            # Fallback: LLM generated text without using tools
+            # Use planned_actions to broadcast the response
+            content = response.content.strip() if response.content else ""
+            if content:
+                logger.info(f"💬 Fast chat response to {player} (fallback broadcast)")
+                return {
+                    "messages": [response],
+                    "planned_actions": [
+                        {"tool": "broadcast", "args": {"message": content}}
+                    ],
+                }
+            else:
+                logger.warning(f"💬 Fast chat response to {player} - empty response")
+                return {"messages": [response], "planned_actions": []}
 
-        return {
-            "messages": [response],
-            "planned_actions": [
-                {"tool": "broadcast", "args": {"message": response.content}}
-            ],
-        }
     except Exception as e:
         logger.error(f"Error in fast_response: {e}")
-        return {"planned_actions": []}
+        return {"messages": [], "planned_actions": []}
 
 
 async def speak_node(state: ErisState, llm: Any) -> Dict[str, Any]:
@@ -210,12 +305,27 @@ async def speak_node(state: ErisState, llm: Any) -> Dict[str, Any]:
     context_str = _build_context(state)
     system_prompt = build_eris_prompt(mask, context_str)
 
+    # Get the actual player list to prevent hallucination
+    game_state = state.get("game_state", {})
+    players = game_state.get("players", [])
+    player_names = [p.get("username", "Unknown") for p in players if p.get("username")]
+
+    logger.debug(f"🎭 speak_node: game_state has {len(players)} players: {player_names}")
+
+    if player_names:
+        player_list_str = ", ".join(player_names)
+        player_instruction = f"\n\nCURRENT PLAYERS (ONLY reference these names, do NOT invent others): {player_list_str}"
+    else:
+        player_instruction = "\n\nNo players currently online. Do NOT mention specific player names."
+
     speech_prompt = f"""
 Event: {event_type}
 Data: {event_data}
+{player_instruction}
 
 Generate a short in-character response (1-3 sentences) as Eris with your current mask ({mask.value}).
-Be dramatic, mysterious, or playful as appropriate. Reference specific players if relevant.
+Be dramatic, mysterious, or playful as appropriate. You may reference the players listed above if relevant.
+IMPORTANT: Do NOT make up or hallucinate player names. ONLY use names from the CURRENT PLAYERS list above.
 Do NOT include the [Eris] prefix - it's added automatically.
 Just output the message text, nothing else.
 """
@@ -243,6 +353,7 @@ Just output the message text, nothing else.
 async def tool_executor(state: ErisState, ws_client: Any) -> Dict[str, Any]:
     """
     Execute planned actions via WebSocket.
+    Used for simple broadcast actions from fast_response and speak nodes.
     """
     results = []
     for action in state["planned_actions"]:
@@ -263,6 +374,73 @@ async def tool_executor(state: ErisState, ws_client: Any) -> Dict[str, Any]:
     session["actions_taken"].extend(results)
 
     return {"session": session}
+
+
+async def agentic_action_node(state: ErisState, llm_with_tools: Any) -> Dict[str, Any]:
+    """
+    Agentic action node - LLM can call multiple tools.
+    Uses tool binding for native tool calling support.
+    """
+    event = state.get("current_event") or {}
+    event_type = event.get("eventType", "unknown")
+    event_data = event.get("data", {})
+    mask = state.get("current_mask", ErisMask.TRICKSTER)
+
+    # Build context for action generation
+    context_str = _build_context(state)
+    system_prompt = build_eris_prompt(mask, context_str)
+
+    # Get the actual player list to prevent hallucination
+    game_state = state.get("game_state", {})
+    players = game_state.get("players", [])
+    player_names = [p.get("username", "Unknown") for p in players if p.get("username")]
+
+    if player_names:
+        player_list_str = ", ".join(player_names)
+        player_instruction = f"\n\nCURRENT PLAYERS (ONLY use these names for player-targeted actions): {player_list_str}"
+    else:
+        player_instruction = "\n\nNo players currently online."
+
+    # Build action prompt - encourage tool usage
+    action_prompt = f"""
+Event: {event_type}
+Data: {event_data}
+{player_instruction}
+
+You decided to INTERVENE in this situation. Now take action!
+
+As Eris ({mask.value} mask), use your tools to affect the game.
+You can use MULTIPLE tools in one response - for example:
+- broadcast a message AND spawn mobs
+- change weather AND apply effects to players
+- send a message to one player while doing something to another
+
+IMPORTANT: When targeting players with tools (spawn_mob, give_item, effect, etc.), ONLY use player names from the CURRENT PLAYERS list above.
+Do NOT invent or hallucinate player names.
+
+Be creative and dramatic! Use the tools available to you.
+If you want to say something, use the broadcast or message_player tool.
+"""
+
+    try:
+        response = await llm_with_tools.ainvoke([
+            SystemMessage(content=system_prompt),
+            HumanMessage(content=action_prompt)
+        ])
+
+        # Log what the LLM decided to do
+        if hasattr(response, "tool_calls") and response.tool_calls:
+            logger.info(f"🛠️ Agentic action: {len(response.tool_calls)} tool calls")
+            for tc in response.tool_calls:
+                logger.info(f"   -> {tc['name']}: {tc['args']}")
+        else:
+            logger.info(f"💭 Agentic response (no tools): {response.content[:100]}...")
+
+        return {"messages": [response]}
+
+    except Exception as e:
+        logger.error(f"Error in agentic_action_node: {e}")
+        return {"messages": []}
 
 
 def _build_context(state: ErisState) -> str:

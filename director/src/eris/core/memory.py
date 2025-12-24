@@ -43,8 +43,10 @@ class ShortTermMemory:
         lines = []
         for event in self.events:
             event_type = event.get("type", "unknown")
-            data = event.get("data", {})
-            time = event.get("time", "")
+            # Event data is stored as {"eventType": ..., "data": {...}}
+            # Extract the nested data payload
+            raw_data = event.get("data", {})
+            data = raw_data.get("data", {}) if isinstance(raw_data, dict) else {}
 
             if event_type == "player_chat":
                 player = data.get("player", "Unknown")
@@ -65,18 +67,24 @@ class ShortTermMemory:
                 player = data.get("player", "Unknown")
                 damage = data.get("damage", 0)
                 health = data.get("health_after", 0)
-                lines.append(f"💥 {player} took {damage} damage (health: {health})")
+                is_close_call = data.get("isCloseCall", False)
+                if is_close_call:
+                    lines.append(f"⚡ {player} nearly died! (health: {health})")
+                else:
+                    lines.append(f"💥 {player} took {damage} damage (health: {health})")
             elif event_type == "dimension_change":
                 player = data.get("player", "Unknown")
                 dimension = data.get("dimension", "unknown")
                 lines.append(f"🌍 {player} entered {dimension}")
-            elif event_type == "player_damaged" and data.get("isCloseCall"):
-                player = data.get("player", "Unknown")
-                lines.append(f"⚡ {player} nearly died!")
             elif event_type == "run_started":
                 lines.append("🎬 New run started!")
+            elif event_type == "run_ending":
+                lines.append("⏹️  Run ending...")
             elif event_type == "run_ended":
                 lines.append("⏹️  Run ended")
+            elif event_type == "player_joined":
+                player = data.get("player", "Unknown")
+                lines.append(f"👋 {player} joined the game")
 
         return "\n".join(lines[-30:])  # Last 30 events max
 
