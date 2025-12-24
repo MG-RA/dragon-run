@@ -19,6 +19,8 @@ from .schemas import (
     DamagePlayerArgs,
     HealPlayerArgs,
     ModifyAuraArgs,
+    SpawnTNTArgs,
+    SpawnFallingBlockArgs,
 )
 
 if TYPE_CHECKING:
@@ -165,6 +167,28 @@ def create_game_tools(ws_client: "GameStateClient") -> List:
         action = "Rewarded" if amount > 0 else "Punished"
         return f"{action} {player} with {amount} aura: {reason}"
 
+    @tool("spawn_tnt", args_schema=SpawnTNTArgs)
+    async def spawn_tnt(near_player: str, count: int = 1, fuse_ticks: int = 60):
+        """Spawn primed TNT near a player for explosive chaos. TNT has a fuse before detonation."""
+        logger.info(f"🔧 Tool: spawn_tnt(target={near_player}, count={count}, fuse={fuse_ticks})")
+        await ws_client.send_command(
+            "spawn_tnt",
+            {"nearPlayer": near_player, "count": count, "fuseTicks": fuse_ticks},
+            reason="Eris Explosive"
+        )
+        return f"Spawned {count} primed TNT near {near_player} with {fuse_ticks/20:.1f}s fuse."
+
+    @tool("spawn_falling_block", args_schema=SpawnFallingBlockArgs)
+    async def spawn_falling_block(block_type: str, near_player: str, count: int = 1, height: int = 15):
+        """Drop falling blocks (anvil, dripstone, sand, gravel) from above a player."""
+        logger.info(f"🔧 Tool: spawn_falling_block(type={block_type}, target={near_player}, count={count}, height={height})")
+        await ws_client.send_command(
+            "spawn_falling",
+            {"blockType": block_type, "nearPlayer": near_player, "count": count, "height": height},
+            reason="Eris Falling Sky"
+        )
+        return f"Spawned {count} falling {block_type} {height} blocks above {near_player}."
+
     return [
         spawn_mob,
         give_item,
@@ -180,4 +204,6 @@ def create_game_tools(ws_client: "GameStateClient") -> List:
         damage_player,
         heal_player,
         modify_aura,
+        spawn_tnt,
+        spawn_falling_block,
     ]

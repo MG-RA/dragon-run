@@ -166,6 +166,19 @@ public class DirectorCommandExecutor {
                 String reason = params.get("reason").getAsString();
                 yield "director aura " + player + " " + amount + " " + reason;
             }
+            case "spawn_tnt" -> {
+                String nearPlayer = params.get("nearPlayer").getAsString();
+                int count = params.has("count") ? params.get("count").getAsInt() : 1;
+                int fuseTicks = params.has("fuseTicks") ? params.get("fuseTicks").getAsInt() : 60;
+                yield "director spawn tnt near " + nearPlayer + " " + count + " " + fuseTicks;
+            }
+            case "spawn_falling" -> {
+                String blockType = params.get("blockType").getAsString();
+                String nearPlayer = params.get("nearPlayer").getAsString();
+                int count = params.has("count") ? params.get("count").getAsInt() : 1;
+                int height = params.has("height") ? params.get("height").getAsInt() : 15;
+                yield "director spawn falling " + blockType + " near " + nearPlayer + " " + count + " " + height;
+            }
             default -> null;
         };
     }

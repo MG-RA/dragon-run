@@ -154,3 +154,26 @@ class ModifyAuraArgs(BaseModel):
     player: str = Field(..., description="Target player name")
     amount: int = Field(..., ge=-100, le=100, description="Aura amount to add/remove (-100 to 100)")
     reason: str = Field(..., description="Reason for aura change (shown to player)")
+
+
+class SpawnTNTArgs(BaseModel):
+    """Arguments for spawning primed TNT."""
+
+    near_player: str = Field(..., description="Target player name")
+    count: int = Field(default=1, ge=1, le=5, description="Number of TNT to spawn (1-5)")
+    fuse_ticks: int = Field(default=60, ge=20, le=100, description="Fuse time in ticks (20-100, default 60 = 3s)")
+
+
+class SpawnFallingBlockArgs(BaseModel):
+    """Arguments for spawning falling blocks."""
+
+    block_type: Literal["anvil", "pointed_dripstone", "sand", "gravel", "concrete_powder"] = Field(
+        ...,
+        description=(
+            "Block type to drop. Dangerous: anvil (heavy damage), pointed_dripstone (impale). "
+            "Annoying: sand, gravel (buries player). Random: concrete_powder (turns to concrete on impact)"
+        )
+    )
+    near_player: str = Field(..., description="Target player name")
+    count: int = Field(default=1, ge=1, le=8, description="Number of blocks (1-8)")
+    height: int = Field(default=15, ge=5, le=30, description="Height above player to spawn (5-30 blocks)")

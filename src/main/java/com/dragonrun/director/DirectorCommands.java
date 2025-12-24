@@ -85,6 +85,69 @@ public class DirectorCommands {
                             )
                         )
                     )
+                    .then(Commands.literal("tnt")
+                        .then(Commands.literal("near")
+                            .then(Commands.argument("player", StringArgumentType.word())
+                                .executes(ctx -> {
+                                    String playerName = StringArgumentType.getString(ctx, "player");
+                                    return executeSpawnTNT(ctx.getSource(), playerName, 1, 60);
+                                })
+                                .then(Commands.argument("count", IntegerArgumentType.integer(1, 5))
+                                    .executes(ctx -> {
+                                        String playerName = StringArgumentType.getString(ctx, "player");
+                                        int count = IntegerArgumentType.getInteger(ctx, "count");
+                                        return executeSpawnTNT(ctx.getSource(), playerName, count, 60);
+                                    })
+                                    .then(Commands.argument("fuseTicks", IntegerArgumentType.integer(20, 100))
+                                        .executes(ctx -> {
+                                            String playerName = StringArgumentType.getString(ctx, "player");
+                                            int count = IntegerArgumentType.getInteger(ctx, "count");
+                                            int fuseTicks = IntegerArgumentType.getInteger(ctx, "fuseTicks");
+                                            return executeSpawnTNT(ctx.getSource(), playerName, count, fuseTicks);
+                                        })
+                                    )
+                                )
+                            )
+                        )
+                    )
+                    .then(Commands.literal("falling")
+                        .then(Commands.argument("blockType", StringArgumentType.word())
+                            .suggests((ctx, builder) -> {
+                                builder.suggest("anvil");
+                                builder.suggest("pointed_dripstone");
+                                builder.suggest("sand");
+                                builder.suggest("gravel");
+                                builder.suggest("concrete_powder");
+                                return builder.buildFuture();
+                            })
+                            .then(Commands.literal("near")
+                                .then(Commands.argument("player", StringArgumentType.word())
+                                    .executes(ctx -> {
+                                        String blockType = StringArgumentType.getString(ctx, "blockType");
+                                        String playerName = StringArgumentType.getString(ctx, "player");
+                                        return executeSpawnFallingBlock(ctx.getSource(), blockType, playerName, 1, 15);
+                                    })
+                                    .then(Commands.argument("count", IntegerArgumentType.integer(1, 8))
+                                        .executes(ctx -> {
+                                            String blockType = StringArgumentType.getString(ctx, "blockType");
+                                            String playerName = StringArgumentType.getString(ctx, "player");
+                                            int count = IntegerArgumentType.getInteger(ctx, "count");
+                                            return executeSpawnFallingBlock(ctx.getSource(), blockType, playerName, count, 15);
+                                        })
+                                        .then(Commands.argument("height", IntegerArgumentType.integer(5, 30))
+                                            .executes(ctx -> {
+                                                String blockType = StringArgumentType.getString(ctx, "blockType");
+                                                String playerName = StringArgumentType.getString(ctx, "player");
+                                                int count = IntegerArgumentType.getInteger(ctx, "count");
+                                                int height = IntegerArgumentType.getInteger(ctx, "height");
+                                                return executeSpawnFallingBlock(ctx.getSource(), blockType, playerName, count, height);
+                                            })
+                                        )
+                                    )
+                                )
+                            )
+                        )
+                    )
                 )
                 .then(Commands.literal("give")
                     .then(Commands.argument("player", StringArgumentType.word())
@@ -702,6 +765,94 @@ public class DirectorCommands {
             NamedTextColor.GREEN
         ));
 
+        return 1;
+    }
+
+    private int executeSpawnTNT(CommandSourceStack source, String playerName, int count, int fuseTicks) {
+        Player player = Bukkit.getPlayer(playerName);
+        if (player == null) {
+            source.getSender().sendMessage(Component.text("Player not found: " + playerName, NamedTextColor.RED));
+            return 0;
+        }
+
+        for (int i = 0; i < count; i++) {
+            // Spawn TNT in a random offset around the player (3-8 blocks away)
+            double distance = 3 + Math.random() * 5;
+            double angle = Math.random() * 2 * Math.PI;
+            double offsetX = Math.cos(angle) * distance;
+            double offsetZ = Math.sin(angle) * distance;
+
+            Location spawnLoc = player.getLocation().add(offsetX, 1.5, offsetZ);
+
+            // Spawn primed TNT entity
+            org.bukkit.entity.TNTPrimed tnt = player.getWorld().spawn(spawnLoc, org.bukkit.entity.TNTPrimed.class);
+            tnt.setFuseTicks(fuseTicks);
+
+            // Add some initial velocity for dramatic effect
+            double vx = (Math.random() - 0.5) * 0.3;
+            double vy = 0.1 + Math.random() * 0.2;
+            double vz = (Math.random() - 0.5) * 0.3;
+            tnt.setVelocity(new org.bukkit.util.Vector(vx, vy, vz));
+        }
+
+        source.getSender().sendMessage(Component.text(
+            "Spawned " + count + " TNT near " + playerName + " (" + (fuseTicks / 20.0) + "s fuse)",
+            NamedTextColor.GREEN
+        ));
+        return 1;
+    }
+
+    private int executeSpawnFallingBlock(CommandSourceStack source, String blockType, String playerName, int count, int height) {
+        Player player = Bukkit.getPlayer(playerName);
+        if (player == null) {
+            source.getSender().sendMessage(Component.text("Player not found: " + playerName, NamedTextColor.RED));
+            return 0;
+        }
+
+        // Convert block type string to Material
+        Material blockMaterial;
+        try {
+            blockMaterial = Material.valueOf(blockType.toUpperCase());
+        } catch (IllegalArgumentException e) {
+            source.getSender().sendMessage(Component.text("Invalid block type: " + blockType, NamedTextColor.RED));
+            return 0;
+        }
+
+        // Validate it's a gravity-affected block
+        if (!blockMaterial.isBlock()) {
+            source.getSender().sendMessage(Component.text(blockType + " is not a valid block", NamedTextColor.RED));
+            return 0;
+        }
+
+        for (int i = 0; i < count; i++) {
+            // Spawn blocks in a spread pattern above the player
+            double offsetX = (Math.random() - 0.5) * 4;
+            double offsetZ = (Math.random() - 0.5) * 4;
+
+            Location spawnLoc = player.getLocation().add(offsetX, height, offsetZ);
+
+            // Spawn falling block using newer API
+            org.bukkit.entity.FallingBlock fallingBlock = player.getWorld().spawn(
+                spawnLoc,
+                org.bukkit.entity.FallingBlock.class,
+                fb -> fb.setBlockData(blockMaterial.createBlockData())
+            );
+
+            // Make sure it can hurt entities
+            fallingBlock.setHurtEntities(true);
+            fallingBlock.setDropItem(false); // Don't drop item when it lands
+
+            // Anvils and dripstone do more damage
+            if (blockMaterial == Material.ANVIL || blockMaterial == Material.POINTED_DRIPSTONE) {
+                fallingBlock.setDamagePerBlock(2.0f); // Vanilla is 2.0
+                fallingBlock.setMaxDamage(40); // Max 20 hearts damage
+            }
+        }
+
+        source.getSender().sendMessage(Component.text(
+            "Spawned " + count + " falling " + blockType + " " + height + " blocks above " + playerName,
+            NamedTextColor.GREEN
+        ));
         return 1;
     }
 
