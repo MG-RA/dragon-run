@@ -171,6 +171,109 @@ public class DirectorCommands {
                         )
                     )
                 )
+                .then(Commands.literal("sound")
+                    .then(Commands.argument("sound", StringArgumentType.greedyString())
+                        .executes(ctx -> {
+                            String soundStr = StringArgumentType.getString(ctx, "sound");
+                            String[] parts = soundStr.split(" ");
+                            String sound = parts[0];
+                            String target = parts.length > 1 ? parts[1] : "@a";
+                            float volume = parts.length > 2 ? Float.parseFloat(parts[2]) : 1.0f;
+                            float pitch = parts.length > 3 ? Float.parseFloat(parts[3]) : 1.0f;
+                            return executePlaySound(ctx.getSource(), sound, target, volume, pitch);
+                        })
+                    )
+                )
+                .then(Commands.literal("title")
+                    .then(Commands.argument("titleArgs", StringArgumentType.greedyString())
+                        .executes(ctx -> {
+                            String args = StringArgumentType.getString(ctx, "titleArgs");
+                            String[] parts = args.split(" ", 6);
+                            String player = parts[0];
+                            int fadeIn = Integer.parseInt(parts[1]);
+                            int stay = Integer.parseInt(parts[2]);
+                            int fadeOut = Integer.parseInt(parts[3]);
+                            String[] texts = parts.length > 4 ? parts[4].split(" \\| ", 2) : new String[]{"", ""};
+                            String title = texts.length > 0 ? texts[0] : "";
+                            String subtitle = texts.length > 1 ? texts[1] : "";
+                            return executeShowTitle(ctx.getSource(), player, title, subtitle, fadeIn, stay, fadeOut);
+                        })
+                    )
+                )
+                .then(Commands.literal("tp")
+                    .then(Commands.literal("random")
+                        .then(Commands.argument("player", StringArgumentType.word())
+                            .then(Commands.argument("radius", IntegerArgumentType.integer(10, 500))
+                                .executes(ctx -> {
+                                    String player = StringArgumentType.getString(ctx, "player");
+                                    int radius = IntegerArgumentType.getInteger(ctx, "radius");
+                                    return executeTeleportRandom(ctx.getSource(), player, radius);
+                                })
+                            )
+                        )
+                    )
+                    .then(Commands.literal("swap")
+                        .then(Commands.argument("player1", StringArgumentType.word())
+                            .then(Commands.argument("player2", StringArgumentType.word())
+                                .executes(ctx -> {
+                                    String p1 = StringArgumentType.getString(ctx, "player1");
+                                    String p2 = StringArgumentType.getString(ctx, "player2");
+                                    return executeTeleportSwap(ctx.getSource(), p1, p2);
+                                })
+                            )
+                        )
+                    )
+                    .then(Commands.literal("isolate")
+                        .then(Commands.argument("player", StringArgumentType.word())
+                            .then(Commands.argument("distance", IntegerArgumentType.integer(50, 1000))
+                                .executes(ctx -> {
+                                    String player = StringArgumentType.getString(ctx, "player");
+                                    int distance = IntegerArgumentType.getInteger(ctx, "distance");
+                                    return executeTeleportIsolate(ctx.getSource(), player, distance);
+                                })
+                            )
+                        )
+                    )
+                )
+                .then(Commands.literal("damage")
+                    .then(Commands.argument("player", StringArgumentType.word())
+                        .then(Commands.argument("amount", IntegerArgumentType.integer(1, 10))
+                            .executes(ctx -> {
+                                String player = StringArgumentType.getString(ctx, "player");
+                                int amount = IntegerArgumentType.getInteger(ctx, "amount");
+                                return executeDamage(ctx.getSource(), player, amount);
+                            })
+                        )
+                    )
+                )
+                .then(Commands.literal("heal")
+                    .then(Commands.argument("player", StringArgumentType.word())
+                        .executes(ctx -> {
+                            String player = StringArgumentType.getString(ctx, "player");
+                            return executeHeal(ctx.getSource(), player, false);
+                        })
+                        .then(Commands.literal("full")
+                            .executes(ctx -> {
+                                String player = StringArgumentType.getString(ctx, "player");
+                                return executeHeal(ctx.getSource(), player, true);
+                            })
+                        )
+                    )
+                )
+                .then(Commands.literal("aura")
+                    .then(Commands.argument("player", StringArgumentType.word())
+                        .then(Commands.argument("amount", IntegerArgumentType.integer(-100, 100))
+                            .then(Commands.argument("reason", StringArgumentType.greedyString())
+                                .executes(ctx -> {
+                                    String player = StringArgumentType.getString(ctx, "player");
+                                    int amount = IntegerArgumentType.getInteger(ctx, "amount");
+                                    String reason = StringArgumentType.getString(ctx, "reason");
+                                    return executeAuraModify(ctx.getSource(), player, amount, reason);
+                                })
+                            )
+                        )
+                    )
+                )
                 .build(),
             "Director AI commands",
             java.util.List.of()
@@ -305,10 +408,15 @@ public class DirectorCommands {
 
     private int executeWeather(CommandSourceStack source, String weatherType) {
         String worldName = plugin.getRunManager().getCurrentWorldName();
-        World world = Bukkit.getWorld(worldName);
 
+        if (worldName == null) {
+            source.getSender().sendMessage(Component.text("No active run to change weather in", NamedTextColor.RED));
+            return 0;
+        }
+
+        World world = Bukkit.getWorld(worldName);
         if (world == null) {
-            source.getSender().sendMessage(Component.text("World not found", NamedTextColor.RED));
+            source.getSender().sendMessage(Component.text("World not found: " + worldName, NamedTextColor.RED));
             return 0;
         }
 
@@ -372,6 +480,177 @@ public class DirectorCommands {
         }
 
         source.getSender().sendMessage(Component.text("Spawned " + count + " fireworks near " + playerName, NamedTextColor.GREEN));
+        return 1;
+    }
+
+    // ==================== NEW CINEMATIC COMMANDS ====================
+
+    private int executeTeleportRandom(CommandSourceStack source, String playerName, int radius) {
+        Player player = Bukkit.getPlayer(playerName);
+        if (player == null) {
+            source.getSender().sendMessage(Component.text("Player not found: " + playerName, NamedTextColor.RED));
+            return 0;
+        }
+
+        org.bukkit.Location current = player.getLocation();
+        org.bukkit.World world = current.getWorld();
+
+        // Find random safe location
+        for (int attempts = 0; attempts < 10; attempts++) {
+            double angle = Math.random() * 2 * Math.PI;
+            double distance = Math.random() * radius;
+            double x = current.getX() + Math.cos(angle) * distance;
+            double z = current.getZ() + Math.sin(angle) * distance;
+
+            org.bukkit.Location target = new org.bukkit.Location(world, x, world.getHighestBlockYAt((int)x, (int)z) + 1, z);
+            if (target.getBlock().getType() == org.bukkit.Material.AIR) {
+                player.teleport(target);
+                source.getSender().sendMessage(Component.text("Teleported " + playerName + " randomly", NamedTextColor.GREEN));
+                return 1;
+            }
+        }
+
+        source.getSender().sendMessage(Component.text("Failed to find safe location", NamedTextColor.RED));
+        return 0;
+    }
+
+    private int executeTeleportSwap(CommandSourceStack source, String player1Name, String player2Name) {
+        Player p1 = Bukkit.getPlayer(player1Name);
+        Player p2 = Bukkit.getPlayer(player2Name);
+
+        if (p1 == null || p2 == null) {
+            source.getSender().sendMessage(Component.text("One or both players not found", NamedTextColor.RED));
+            return 0;
+        }
+
+        org.bukkit.Location loc1 = p1.getLocation().clone();
+        org.bukkit.Location loc2 = p2.getLocation().clone();
+
+        p1.teleport(loc2);
+        p2.teleport(loc1);
+
+        source.getSender().sendMessage(Component.text("Swapped " + player1Name + " and " + player2Name, NamedTextColor.GREEN));
+        return 1;
+    }
+
+    private int executeTeleportIsolate(CommandSourceStack source, String playerName, int distance) {
+        Player player = Bukkit.getPlayer(playerName);
+        if (player == null) {
+            source.getSender().sendMessage(Component.text("Player not found: " + playerName, NamedTextColor.RED));
+            return 0;
+        }
+
+        org.bukkit.Location current = player.getLocation();
+        double angle = Math.random() * 2 * Math.PI;
+        double x = current.getX() + Math.cos(angle) * distance;
+        double z = current.getZ() + Math.sin(angle) * distance;
+
+        org.bukkit.Location target = new org.bukkit.Location(current.getWorld(), x,
+            current.getWorld().getHighestBlockYAt((int)x, (int)z) + 1, z);
+
+        player.teleport(target);
+        source.getSender().sendMessage(Component.text("Isolated " + playerName + " " + distance + " blocks away", NamedTextColor.GREEN));
+        return 1;
+    }
+
+    private int executePlaySound(CommandSourceStack source, String sound, String target, float volume, float pitch) {
+        if ("@a".equals(target)) {
+            for (Player player : Bukkit.getOnlinePlayers()) {
+                player.playSound(player.getLocation(), sound, volume, pitch);
+            }
+            source.getSender().sendMessage(Component.text("Played sound to all players", NamedTextColor.GREEN));
+        } else {
+            Player player = Bukkit.getPlayer(target);
+            if (player == null) {
+                source.getSender().sendMessage(Component.text("Player not found: " + target, NamedTextColor.RED));
+                return 0;
+            }
+            player.playSound(player.getLocation(), sound, volume, pitch);
+            source.getSender().sendMessage(Component.text("Played sound to " + target, NamedTextColor.GREEN));
+        }
+        return 1;
+    }
+
+    private int executeShowTitle(CommandSourceStack source, String playerName, String titleText, String subtitleText, int fadeIn, int stay, int fadeOut) {
+        Player player = Bukkit.getPlayer(playerName);
+        if (player == null) {
+            source.getSender().sendMessage(Component.text("Player not found: " + playerName, NamedTextColor.RED));
+            return 0;
+        }
+
+        Component title = titleText.isEmpty() ? Component.empty() : Component.text(titleText);
+        Component subtitle = subtitleText.isEmpty() ? Component.empty() : Component.text(subtitleText);
+
+        player.showTitle(net.kyori.adventure.title.Title.title(
+            title,
+            subtitle,
+            net.kyori.adventure.title.Title.Times.times(
+                java.time.Duration.ofMillis(fadeIn * 50),
+                java.time.Duration.ofMillis(stay * 50),
+                java.time.Duration.ofMillis(fadeOut * 50)
+            )
+        ));
+
+        source.getSender().sendMessage(Component.text("Showed title to " + playerName, NamedTextColor.GREEN));
+        return 1;
+    }
+
+    private int executeDamage(CommandSourceStack source, String playerName, int amount) {
+        Player player = Bukkit.getPlayer(playerName);
+        if (player == null) {
+            source.getSender().sendMessage(Component.text("Player not found: " + playerName, NamedTextColor.RED));
+            return 0;
+        }
+
+        // Don't kill the player - cap damage
+        double maxDamage = player.getHealth() - 1.0;
+        double actualDamage = Math.min(amount, maxDamage);
+
+        if (actualDamage > 0) {
+            player.damage(actualDamage);
+            source.getSender().sendMessage(Component.text("Damaged " + playerName + " for " + actualDamage + " hearts", NamedTextColor.GREEN));
+        } else {
+            source.getSender().sendMessage(Component.text(playerName + " is too low health to damage safely", NamedTextColor.YELLOW));
+        }
+
+        return 1;
+    }
+
+    private int executeHeal(CommandSourceStack source, String playerName, boolean full) {
+        Player player = Bukkit.getPlayer(playerName);
+        if (player == null) {
+            source.getSender().sendMessage(Component.text("Player not found: " + playerName, NamedTextColor.RED));
+            return 0;
+        }
+
+        if (full) {
+            player.setHealth(player.getMaxHealth());
+            player.setFoodLevel(20);
+            player.setSaturation(20.0f);
+            source.getSender().sendMessage(Component.text("Fully healed " + playerName, NamedTextColor.GREEN));
+        } else {
+            player.setHealth(Math.min(player.getHealth() + 6.0, player.getMaxHealth()));
+            source.getSender().sendMessage(Component.text("Partially healed " + playerName, NamedTextColor.GREEN));
+        }
+
+        return 1;
+    }
+
+    private int executeAuraModify(CommandSourceStack source, String playerName, int amount, String reason) {
+        Player player = Bukkit.getPlayer(playerName);
+        if (player == null) {
+            source.getSender().sendMessage(Component.text("Player not found: " + playerName, NamedTextColor.RED));
+            return 0;
+        }
+
+        plugin.getAuraManager().addAura(player.getUniqueId(), amount, reason);
+
+        String action = amount > 0 ? "Added" : "Removed";
+        source.getSender().sendMessage(Component.text(
+            action + " " + Math.abs(amount) + " aura " + (amount > 0 ? "to" : "from") + " " + playerName + ": " + reason,
+            NamedTextColor.GREEN
+        ));
+
         return 1;
     }
 }

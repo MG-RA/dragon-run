@@ -13,6 +13,12 @@ from .schemas import (
     StrikeLightningArgs,
     ChangeWeatherArgs,
     LaunchFireworkArgs,
+    TeleportArgs,
+    PlaySoundArgs,
+    ShowTitleArgs,
+    DamagePlayerArgs,
+    HealPlayerArgs,
+    ModifyAuraArgs,
 )
 
 if TYPE_CHECKING:
@@ -109,6 +115,56 @@ def create_game_tools(ws_client: "GameStateClient") -> List:
         )
         return f"Launched {count} fireworks near {player}."
 
+    @tool("teleport_player", args_schema=TeleportArgs)
+    async def teleport_player(player: str, mode: str = "random", target: str | None = None, radius: int = 100, distance: int = 200):
+        """Teleport a player - random location, swap with another, or isolate far away."""
+        logger.info(f"🔧 Tool: teleport_player(player={player}, mode={mode})")
+        params = {"player": player, "mode": mode}
+        if mode == "swap" and target:
+            params["target"] = target
+        elif mode == "random":
+            params["radius"] = radius
+        elif mode == "isolate":
+            params["distance"] = distance
+        await ws_client.send_command("teleport", params, reason="Eris Teleport")
+        return f"Teleported {player} ({mode} mode)."
+
+    @tool("play_sound", args_schema=PlaySoundArgs)
+    async def play_sound(sound: str, target: str = "@a", volume: float = 1.0, pitch: float = 1.0):
+        """Play a cinematic sound effect for psychological tension."""
+        logger.info(f"🔧 Tool: play_sound(sound={sound}, target={target})")
+        await ws_client.send_command("sound", {"sound": sound, "target": target, "volume": volume, "pitch": pitch})
+        return f"Played {sound} to {target}."
+
+    @tool("show_title", args_schema=ShowTitleArgs)
+    async def show_title(player: str, title: str = "", subtitle: str = "", fade_in: int = 10, stay: int = 70, fade_out: int = 20):
+        """Show a cinematic title/subtitle to a player for storytelling."""
+        logger.info(f"🔧 Tool: show_title(player={player}, title={title})")
+        await ws_client.send_command("title", {"player": player, "title": title, "subtitle": subtitle, "fadeIn": fade_in, "stay": stay, "fadeOut": fade_out})
+        return f"Showed title to {player}."
+
+    @tool("damage_player", args_schema=DamagePlayerArgs)
+    async def damage_player(player: str, amount: int = 4):
+        """Deal non-lethal damage to create tension (never kills)."""
+        logger.info(f"🔧 Tool: damage_player(player={player}, amount={amount})")
+        await ws_client.send_command("damage", {"player": player, "amount": amount})
+        return f"Damaged {player} for {amount} half-hearts."
+
+    @tool("heal_player", args_schema=HealPlayerArgs)
+    async def heal_player(player: str, full: bool = True):
+        """Heal a player fully or partially (3 hearts)."""
+        logger.info(f"🔧 Tool: heal_player(player={player}, full={full})")
+        await ws_client.send_command("heal", {"player": player, "full": full})
+        return f"{'Fully' if full else 'Partially'} healed {player}."
+
+    @tool("modify_aura", args_schema=ModifyAuraArgs)
+    async def modify_aura(player: str, amount: int, reason: str):
+        """Reward or punish players by modifying their aura based on their actions."""
+        logger.info(f"🔧 Tool: modify_aura(player={player}, amount={amount}, reason='{reason}')")
+        await ws_client.send_command("aura", {"player": player, "amount": amount, "reason": reason})
+        action = "Rewarded" if amount > 0 else "Punished"
+        return f"{action} {player} with {amount} aura: {reason}"
+
     return [
         spawn_mob,
         give_item,
@@ -118,4 +174,10 @@ def create_game_tools(ws_client: "GameStateClient") -> List:
         strike_lightning,
         change_weather,
         launch_firework,
+        teleport_player,
+        play_sound,
+        show_title,
+        damage_player,
+        heal_player,
+        modify_aura,
     ]

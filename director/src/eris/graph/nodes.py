@@ -57,19 +57,33 @@ async def context_enricher(state: ErisState, db: Database) -> Dict[str, Any]:
         logger.warning("Database not available for context enrichment")
         return {"player_histories": {}}
 
-    players = state["game_state"].get("players", [])
+    game_state = state.get("game_state", {})
+    players = game_state.get("players", [])
     player_histories = {}
+
+    logger.info(f"📚 Context enricher: game_state keys={list(game_state.keys())}, players count={len(players)}")
+
+    if players:
+        logger.info(f"📚 Players in game_state: {[p.get('username') for p in players]}")
 
     for player in players:
         uuid = player.get("uuid")
+        username = player.get("username", "Unknown")
+        logger.info(f"📚 Processing player: {username}, UUID: {uuid}")
         if uuid:
             try:
-                history = await db.get_player_summary(uuid)
+                # Ensure UUID is a string (in case it's not already)
+                uuid_str = str(uuid)
+                history = await db.get_player_summary(uuid_str)
                 if history:
-                    player_histories[player["username"]] = history
+                    player_histories[username] = history
+                    logger.info(f"📚 ✅ Loaded history for {username}: {history.get('total_runs', 0)} runs, {history.get('aura', 0)} aura")
+                else:
+                    logger.warning(f"📚 ❌ No history found for {username} (UUID: {uuid_str})")
             except Exception as e:
-                logger.error(f"Error fetching player history for {uuid}: {e}")
+                logger.error(f"📚 Error fetching player history for {username} ({uuid}): {e}", exc_info=True)
 
+    logger.info(f"📚 Context enrichment complete: {len(player_histories)} player histories loaded")
     return {"player_histories": player_histories}
 
 
@@ -149,6 +163,7 @@ async def decision_node(state: ErisState, llm: Any) -> Dict[str, Any]:
         force_speak = True
     elif event_type == "dimension_change":
         event_guidance = "\n⚡ A player changed dimensions! This is a milestone worth commenting on."
+        force_speak = True
     elif event_type == "run_ended":
         event_guidance = "\n⚡ The run has ended! Comment on how it went."
         force_speak = True

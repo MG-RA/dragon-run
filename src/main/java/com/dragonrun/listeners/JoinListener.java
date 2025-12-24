@@ -49,6 +49,7 @@ public class JoinListener implements Listener {
 
         // Handle world placement based on game state
         GameState state = plugin.getRunManager().getGameState();
+        String hardcoreWorldName = plugin.getRunManager().getCurrentWorldName();
 
         switch (state) {
             case IDLE, GENERATING, RESETTING -> {
@@ -57,9 +58,16 @@ public class JoinListener implements Listener {
                 player.setGameMode(GameMode.CREATIVE);
             }
             case ACTIVE -> {
-                // Mid-run joiner: spectator mode if spectators enabled, otherwise lobby
-                if (plugin.getConfig().getBoolean("spectator.enabled", true)) {
-                    // Teleport to hardcore world as spectator
+                // Check if player was actively participating when they left
+                boolean wasParticipating = plugin.getRunManager().isActiveParticipant(player.getUniqueId());
+
+                if (wasParticipating) {
+                    // Returning player - restore to survival mode
+                    plugin.getWorldManager().teleportToHardcore(player);
+                    player.setGameMode(GameMode.SURVIVAL);
+                    player.sendMessage(MessageUtil.info("Welcome back! You've been restored to the run."));
+                } else if (plugin.getConfig().getBoolean("spectator.enabled", true)) {
+                    // New mid-run joiner: spectator mode
                     plugin.getWorldManager().teleportToHardcoreSpectator(player);
                     player.setGameMode(GameMode.SPECTATOR);
                     player.sendMessage(MessageUtil.info("Run in progress. You are spectating."));
@@ -77,6 +85,8 @@ public class JoinListener implements Listener {
         if (state == GameState.ACTIVE && player.getGameMode() == GameMode.SURVIVAL) {
             plugin.getAuraManager().incrementRunCount(player.getUniqueId());
             plugin.getRunManager().updatePeakPlayers();
+            // Mark player as active participant
+            plugin.getRunManager().addActiveParticipant(player.getUniqueId());
         }
     }
 

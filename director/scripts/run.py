@@ -18,11 +18,20 @@ sys.path.insert(0, str(BASE_DIR))
 load_dotenv(BASE_DIR / ".env")
 
 # Configure logging
+LOG_DIR = BASE_DIR / "logs"
+LOG_DIR.mkdir(exist_ok=True)
+LOG_FILE = LOG_DIR / "eris.log"
+
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s | %(name)s | %(levelname)s | %(message)s",
+    handlers=[
+        logging.StreamHandler(),  # Console output
+        logging.FileHandler(LOG_FILE, mode='a', encoding='utf-8')  # File output
+    ]
 )
 logger = logging.getLogger("eris")
+logger.info(f"📝 Logging to: {LOG_FILE}")
 
 
 async def load_config() -> dict:
@@ -72,9 +81,11 @@ async def main():
     db = Database(db_config)
     try:
         await db.connect()
+        logger.info(f"📊 Database connected: {db_config['host']}:{db_config['port']}/{db_config['database']}")
     except Exception as e:
-        logger.error(f"Failed to connect to database: {e}")
-        # Continue without DB for now
+        logger.warning(f"⚠️  Database connection failed: {e}")
+        logger.warning("⚠️  Continuing without long-term memory (player histories won't be available)")
+        # Continue without DB - context_enricher will handle missing db gracefully
 
     # LLM
     ollama_config = config["ollama"]
@@ -99,17 +110,23 @@ async def main():
 
     # Track current game state
     current_game_state = {}
+    last_state_log = {"players": [], "gameState": None}
 
     async def on_state_update(data: dict):
         """Handle game state updates."""
-        nonlocal current_game_state
+        nonlocal current_game_state, last_state_log
         # State messages have fields at root level (players, gameState, etc.)
         # NOT nested under a "data" key like events are
         current_game_state = data
-        # Log player count for debugging
+
+        # Only log when state changes (avoid spam)
         players = data.get("players", [])
         player_names = [p.get("username", "?") for p in players]
-        logger.debug(f"📊 State update: {len(players)} players online: {player_names}")
+        game_state = data.get("gameState")
+
+        if player_names != last_state_log["players"] or game_state != last_state_log["gameState"]:
+            logger.info(f"📊 State update: {game_state}, {len(players)} players: {player_names}")
+            last_state_log = {"players": player_names, "gameState": game_state}
 
     async def on_event(data: dict):
         """Handle game events."""
@@ -179,12 +196,15 @@ async def main():
         await ws_client.connect()
     except KeyboardInterrupt:
         logger.info("Shutting down...")
+    except asyncio.CancelledError:
+        logger.info("Shutting down...")
     except Exception as e:
         logger.error(f"Fatal error: {e}", exc_info=True)
     finally:
         ws_client.stop()
         if db.pool:
             await db.close()
+        logger.info("Eris Director stopped.")
 
 
 if __name__ == "__main__":

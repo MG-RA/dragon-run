@@ -35,6 +35,9 @@ public class RunManager {
     private boolean dragonAlive = true;
     private String currentWorldName;
 
+    // Track UUIDs of players actively participating in current run
+    private final java.util.Set<java.util.UUID> activeParticipants = new java.util.concurrent.ConcurrentHashMap<java.util.UUID, Boolean>().keySet(true);
+
     public RunManager(DragonRunPlugin plugin, Database database, WorldManager worldManager) {
         this.plugin = plugin;
         this.database = database;
@@ -131,6 +134,14 @@ public class RunManager {
                     runStartTime = System.currentTimeMillis();
                     dragonAlive = true;
                     broadcastRunStartMessage();
+
+                    // Mark all players in hardcore world as active participants
+                    org.bukkit.World hardcoreWorld = worldManager.getHardcoreWorld();
+                    if (hardcoreWorld != null) {
+                        for (org.bukkit.entity.Player player : hardcoreWorld.getPlayers()) {
+                            addActiveParticipant(player.getUniqueId());
+                        }
+                    }
 
                     // Broadcast to Director AI
                     broadcastDirectorEvent("run_started", currentRunId, currentWorldName);
@@ -417,6 +428,9 @@ public class RunManager {
         } catch (SQLException e) {
             plugin.getLogger().severe("Failed to end run: " + e.getMessage());
         }
+
+        // Clear active participants when run ends
+        clearActiveParticipants();
     }
 
     /**
@@ -528,6 +542,34 @@ public class RunManager {
 
     public String getCurrentWorldName() {
         return currentWorldName;
+    }
+
+    /**
+     * Mark a player as actively participating in the current run
+     */
+    public void addActiveParticipant(UUID uuid) {
+        activeParticipants.add(uuid);
+    }
+
+    /**
+     * Check if a player was actively participating in the current run
+     */
+    public boolean isActiveParticipant(UUID uuid) {
+        return activeParticipants.contains(uuid);
+    }
+
+    /**
+     * Remove a player from active participants (when they die or leave)
+     */
+    public void removeActiveParticipant(UUID uuid) {
+        activeParticipants.remove(uuid);
+    }
+
+    /**
+     * Clear all active participants (called when run ends)
+     */
+    public void clearActiveParticipants() {
+        activeParticipants.clear();
     }
 
     /**

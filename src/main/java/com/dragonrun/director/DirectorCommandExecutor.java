@@ -103,6 +103,58 @@ public class DirectorCommandExecutor {
                 int count = params.has("count") ? params.get("count").getAsInt() : 1;
                 yield "director firework near " + nearPlayer + " " + count;
             }
+            case "teleport", "tp" -> {
+                String player = params.get("player").getAsString();
+                String mode = params.has("mode") ? params.get("mode").getAsString() : "random";
+                if ("swap".equals(mode)) {
+                    String target = params.get("target").getAsString();
+                    yield "director tp swap " + player + " " + target;
+                } else if ("isolate".equals(mode)) {
+                    int distance = params.has("distance") ? params.get("distance").getAsInt() : 200;
+                    yield "director tp isolate " + player + " " + distance;
+                } else { // random
+                    int radius = params.has("radius") ? params.get("radius").getAsInt() : 100;
+                    yield "director tp random " + player + " " + radius;
+                }
+            }
+            case "sound" -> {
+                String sound = params.get("sound").getAsString();
+                String target = params.has("target") ? params.get("target").getAsString() : "@a";
+                float volume = params.has("volume") ? params.get("volume").getAsFloat() : 1.0f;
+                float pitch = params.has("pitch") ? params.get("pitch").getAsFloat() : 1.0f;
+                yield "director sound " + sound + " " + target + " " + volume + " " + pitch;
+            }
+            case "title" -> {
+                String player = params.get("player").getAsString();
+                String titleText = params.has("title") ? params.get("title").getAsString() : "";
+                String subtitleText = params.has("subtitle") ? params.get("subtitle").getAsString() : "";
+                int fadeIn = params.has("fadeIn") ? params.get("fadeIn").getAsInt() : 10;
+                int stay = params.has("stay") ? params.get("stay").getAsInt() : 70;
+                int fadeOut = params.has("fadeOut") ? params.get("fadeOut").getAsInt() : 20;
+                yield "director title " + player + " " + fadeIn + " " + stay + " " + fadeOut + " " + titleText + " | " + subtitleText;
+            }
+            case "gamerule" -> {
+                String rule = params.get("rule").getAsString();
+                String value = params.get("value").getAsString();
+                int duration = params.has("duration") ? params.get("duration").getAsInt() : 0; // 0 = permanent
+                yield "director gamerule " + rule + " " + value + (duration > 0 ? " " + duration : "");
+            }
+            case "damage" -> {
+                String player = params.get("player").getAsString();
+                int amount = params.has("amount") ? params.get("amount").getAsInt() : 4; // 2 hearts
+                yield "director damage " + player + " " + amount;
+            }
+            case "heal" -> {
+                String player = params.get("player").getAsString();
+                boolean full = params.has("full") ? params.get("full").getAsBoolean() : true;
+                yield "director heal " + player + (full ? " full" : "");
+            }
+            case "aura" -> {
+                String player = params.get("player").getAsString();
+                int amount = params.get("amount").getAsInt();
+                String reason = params.get("reason").getAsString();
+                yield "director aura " + player + " " + amount + " " + reason;
+            }
             default -> null;
         };
     }
