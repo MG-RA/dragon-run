@@ -37,6 +37,9 @@ public class DragonRunPlugin extends JavaPlugin {
     private ScoreboardManager scoreboardManager;
     private AchievementListener achievementListener;
     private com.dragonrun.listeners.ResourceMilestoneListener resourceMilestoneListener;
+    private com.dragonrun.listeners.MobKillListener mobKillListener;
+    private com.dragonrun.listeners.StructureDiscoveryListener structureDiscoveryListener;
+    private com.dragonrun.listeners.MinecraftAdvancementListener minecraftAdvancementListener;
     private DirectorWebSocketServer directorServer;
 
     @Override
@@ -78,6 +81,12 @@ public class DragonRunPlugin extends JavaPlugin {
         getServer().getPluginManager().registerEvents(new com.dragonrun.listeners.DamageListener(this), this);
         resourceMilestoneListener = new com.dragonrun.listeners.ResourceMilestoneListener(this);
         getServer().getPluginManager().registerEvents(resourceMilestoneListener, this);
+        mobKillListener = new com.dragonrun.listeners.MobKillListener(this);
+        getServer().getPluginManager().registerEvents(mobKillListener, this);
+        structureDiscoveryListener = new com.dragonrun.listeners.StructureDiscoveryListener(this);
+        getServer().getPluginManager().registerEvents(structureDiscoveryListener, this);
+        minecraftAdvancementListener = new com.dragonrun.listeners.MinecraftAdvancementListener(this);
+        getServer().getPluginManager().registerEvents(minecraftAdvancementListener, this);
 
         // 6. Register commands using Paper's lifecycle events
         registerCommands();
@@ -184,6 +193,18 @@ public class DragonRunPlugin extends JavaPlugin {
 
     public com.dragonrun.listeners.ResourceMilestoneListener getResourceMilestoneListener() {
         return resourceMilestoneListener;
+    }
+
+    public com.dragonrun.listeners.MobKillListener getMobKillListener() {
+        return mobKillListener;
+    }
+
+    public com.dragonrun.listeners.StructureDiscoveryListener getStructureDiscoveryListener() {
+        return structureDiscoveryListener;
+    }
+
+    public com.dragonrun.listeners.MinecraftAdvancementListener getMinecraftAdvancementListener() {
+        return minecraftAdvancementListener;
     }
 
     @SuppressWarnings("UnstableApiUsage")

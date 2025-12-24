@@ -38,6 +38,8 @@ class EventProcessor:
             "state": 15.0,  # Process state every 15s max
             "player_damaged": 5.0,  # Aggregate damage events
             "resource_milestone": 3.0,
+            "mob_kills_batch": 0,  # Already batched on Java side
+            "advancement_made": 2.0,  # Allow rapid advancements but slight debounce
         }
 
         # Processing lock
@@ -108,14 +110,25 @@ class EventProcessor:
         event_type = event.get("eventType", "")
 
         priority_map = {
+            # Critical - run-ending or major milestone events
             "player_death": EventPriority.CRITICAL,
             "dragon_killed": EventPriority.CRITICAL,
+            "boss_killed": EventPriority.CRITICAL,  # Wither, Elder Guardian, Warden
+            # High - player interactions and significant progress
             "player_chat": EventPriority.HIGH,
             "player_damaged": EventPriority.HIGH,
+            "structure_discovered": EventPriority.HIGH,  # Stronghold, Fortress, etc.
+            # Medium - progression events
             "dimension_change": EventPriority.MEDIUM,
+            "player_dimension_change": EventPriority.MEDIUM,
             "resource_milestone": EventPriority.MEDIUM,
+            "advancement_made": EventPriority.MEDIUM,  # Vanilla Minecraft advancements
+            "achievement_unlocked": EventPriority.MEDIUM,  # DragonRun achievements
             "run_started": EventPriority.MEDIUM,
             "run_ended": EventPriority.MEDIUM,
+            "run_starting": EventPriority.MEDIUM,
+            # Low - batched/aggregate data
+            "mob_kills_batch": EventPriority.LOW,  # Aggregated kill data
             "state": EventPriority.LOW,
         }
 

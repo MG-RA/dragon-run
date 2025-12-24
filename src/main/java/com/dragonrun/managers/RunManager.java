@@ -121,6 +121,12 @@ public class RunManager {
         if (plugin.getResourceMilestoneListener() != null) {
             plugin.getResourceMilestoneListener().resetMilestones();
         }
+        if (plugin.getMobKillListener() != null) {
+            plugin.getMobKillListener().resetRunData();
+        }
+        if (plugin.getStructureDiscoveryListener() != null) {
+            plugin.getStructureDiscoveryListener().resetRunData();
+        }
 
         broadcastGeneratingMessage();
 

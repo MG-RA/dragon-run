@@ -85,6 +85,50 @@ class ShortTermMemory:
             elif event_type == "player_joined":
                 player = data.get("player", "Unknown")
                 lines.append(f"👋 {player} joined the game")
+            elif event_type == "player_dimension_change":
+                player = data.get("player", "Unknown")
+                from_dim = data.get("from", "unknown")
+                to_dim = data.get("to", "unknown")
+                lines.append(f"🌍 {player} traveled from {from_dim} to {to_dim}")
+            elif event_type == "boss_killed":
+                player = data.get("player", "Unknown")
+                mob_type = data.get("mobType", "boss")
+                weapon = data.get("weapon", "unknown")
+                lines.append(f"🏆 {player} killed {mob_type} with {weapon}!")
+            elif event_type == "mob_kills_batch":
+                # Aggregated kill data - format as summary
+                player_kills = data.get("playerKills", [])
+                total = data.get("totalKills", 0)
+                if player_kills:
+                    summaries = []
+                    for pk in player_kills[:3]:  # Top 3 players
+                        name = pk.get("player", "Unknown")
+                        count = pk.get("count", 0)
+                        summaries.append(f"{name}: {count}")
+                    lines.append(f"⚔️ Mob kills (30s): {', '.join(summaries)} | Total: {total}")
+            elif event_type == "structure_discovered":
+                player = data.get("player", "Unknown")
+                structure = data.get("structureName", data.get("structureType", "structure"))
+                priority = data.get("priority", "low")
+                if priority == "critical":
+                    lines.append(f"🎯 {player} found the {structure}! (Critical milestone)")
+                elif priority == "high":
+                    lines.append(f"🏰 {player} discovered a {structure}")
+                else:
+                    lines.append(f"📍 {player} found a {structure}")
+            elif event_type == "advancement_made":
+                player = data.get("player", "Unknown")
+                adv_name = data.get("advancementName", "advancement")
+                is_critical = data.get("isCritical", False)
+                if is_critical:
+                    lines.append(f"⭐ {player} achieved: {adv_name} (Critical!)")
+                else:
+                    lines.append(f"📜 {player}: {adv_name}")
+            elif event_type == "achievement_unlocked":
+                player = data.get("player", "Unknown")
+                title = data.get("title", "achievement")
+                aura = data.get("auraReward", 0)
+                lines.append(f"🏅 {player} unlocked: {title} (+{aura} aura)")
 
         return "\n".join(lines[-30:])  # Last 30 events max
 
