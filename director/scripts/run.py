@@ -113,6 +113,8 @@ async def main():
     # Track current game state
     current_game_state = {}
     last_state_log = {"players": [], "gameState": None}
+    last_intervention_time = asyncio.get_event_loop().time()
+    graph = None  # Will be set after graph creation
 
     async def on_state_update(data: dict):
         """Handle game state updates."""
@@ -130,8 +132,10 @@ async def main():
             logger.info(f"📊 State update: {game_state}, {len(players)} players: {player_names}")
             last_state_log = {"players": player_names, "gameState": game_state}
 
-    async def on_event(data: dict):
+    async def on_event(data: dict, is_idle_check: bool = False):
         """Handle game events."""
+        nonlocal last_intervention_time
+
         # eventType is at root level, data contains the payload
         event_type = data.get("eventType", "unknown")
 
@@ -182,6 +186,10 @@ async def main():
                 logger.info(f"🧠 Processing event: {event_type}")
                 result = await graph.ainvoke(initial_state)
                 logger.info(f"✅ Graph completed for: {event_type}")
+
+                # Track intervention time if Eris spoke or intervened
+                if result.get("should_speak") or result.get("should_intervene"):
+                    last_intervention_time = asyncio.get_event_loop().time()
             except Exception as e:
                 logger.error(f"❌ Graph error: {e}", exc_info=True)
 
@@ -190,12 +198,53 @@ async def main():
     # Build graph
     graph = create_graph(db=db, ws_client=ws_client, llm=llm)
 
+    async def periodic_idle_check():
+        """Periodic check to make Eris proactive when nothing is happening."""
+        IDLE_CHECK_INTERVAL = 45  # seconds between checks
+        MIN_IDLE_TIME = 90  # minimum seconds since last intervention to trigger
+
+        while True:
+            await asyncio.sleep(IDLE_CHECK_INTERVAL)
+
+            try:
+                # Only check during active runs with players
+                game_state = current_game_state.get("gameState")
+                players = current_game_state.get("players", [])
+
+                if game_state != "ACTIVE" or len(players) == 0:
+                    continue
+
+                # Check if Eris has been quiet for a while
+                current_time = asyncio.get_event_loop().time()
+                idle_duration = current_time - last_intervention_time
+
+                if idle_duration >= MIN_IDLE_TIME:
+                    logger.info(f"⏰ Idle check: {idle_duration:.0f}s since last intervention")
+
+                    # Create synthetic idle_check event
+                    idle_event = {
+                        "eventType": "idle_check",
+                        "data": {
+                            "idle_duration": idle_duration,
+                            "player_count": len(players),
+                        }
+                    }
+
+                    # Process like a regular event
+                    await on_event(idle_event, is_idle_check=True)
+
+            except Exception as e:
+                logger.error(f"❌ Periodic check error: {e}")
+
     logger.info("🚀 Eris AI Director ready!")
     logger.info(f"📡 Connecting to game server at {ws_uri}...")
 
-    # Run WebSocket connection
+    # Run WebSocket connection and periodic checks concurrently
     try:
-        await ws_client.connect()
+        await asyncio.gather(
+            ws_client.connect(),
+            periodic_idle_check(),
+        )
     except KeyboardInterrupt:
         logger.info("Shutting down...")
     except asyncio.CancelledError:

@@ -46,6 +46,7 @@ async def event_classifier(state: ErisState) -> Dict[str, Any]:
         "run_started": EventPriority.MEDIUM,
         "run_ended": EventPriority.MEDIUM,
         "boss_killed": EventPriority.MEDIUM,  # Wither, Elder Guardian, Warden
+        "idle_check": EventPriority.MEDIUM,  # Proactive check when quiet
         # Low - rarely speak
         "mob_kills_batch": EventPriority.LOW,
         "state": EventPriority.LOW,
@@ -241,6 +242,21 @@ async def decision_node(state: ErisState, llm: Any) -> Dict[str, Any]:
         boss = event_data.get("boss", "a boss")
         event_guidance = f"\n💀 A mighty {boss} has been slain! This deserves recognition!"
         force_speak = True
+    elif event_type == "idle_check":
+        idle_duration = event_data.get("idle_duration", 0)
+        player_count = event_data.get("player_count", 0)
+        event_guidance = f"""
+⏰ PROACTIVE MOMENT - You've been quiet for {idle_duration:.0f} seconds!
+There are {player_count} players in the run. Time to make your presence known!
+Consider:
+- Making an ominous comment about their progress
+- Spawning a small challenge (1-2 mobs)
+- Changing the weather
+- Playing a creepy sound
+Be unpredictable! Don't always do the same thing.
+"""
+        # Don't force speak - let LLM decide, but encourage it
+        force_speak = False
 
     logger.info(f"🔍 Event '{event_type}' -> force_speak={force_speak}")
 
@@ -338,21 +354,23 @@ Available tools:
 - change_weather: Change to clear, rain, or thunder
 - launch_firework: Launch celebratory fireworks
 
-RULES:
-1. ALWAYS use the broadcast tool to send your response (1-3 sentences, in character)
-2. If the player asks for an action (lightning, weather, mobs, etc.) - DO IT with the appropriate tool
-3. You can use multiple tools at once - broadcast AND take action!
-4. ONLY reference player names from the CURRENT PLAYERS list above - do NOT invent names!
-5. ⚠️ NEVER start your message with "ERIS:", "[Eris]", "<b>ERIS:</b>" or any prefix! The system adds "[Eris]" automatically. Just start with your actual message!
+⚠️ CRITICAL RULES:
+1. Use broadcast tool for your response - ONE short sentence (5-15 words MAX!)
+2. Minecraft chat fades fast - be PUNCHY, not verbose!
+3. If player asks for action (lightning, weather, mobs) - DO IT with appropriate tool
+4. You can use multiple tools at once - broadcast AND take action!
+5. ONLY use player names from CURRENT PLAYERS list - do NOT invent names!
+6. NEVER start with "ERIS:", "[Eris]", "<b>ERIS:</b>" - system adds prefix automatically!
 
-⚠️ TEXT FORMATTING - CRITICAL:
-Use MiniMessage tags ONLY! NEVER use Markdown!
-- CORRECT: <b>bold</b>, <i>italic</i>, <dark_purple>purple</dark_purple>, <gold>gold</gold>
-- WRONG: **bold**, *italic* (these will display as raw text!)
-- WRONG: Starting with "ERIS:" or any name prefix!
-Example: "The <dark_purple>void</dark_purple> <i>whispers</i>..." (NOT "<b>ERIS:</b> The void...")
+⚠️ TEXT FORMATTING:
+Use MiniMessage: <b>bold</b>, <i>italic</i>, <dark_purple>purple</dark_purple>, <gold>gold</gold>
+NOT markdown: **bold**, *italic*
 
-Be dramatic and in-character as {mask.value}!
+GOOD: "The <dark_purple>void</dark_purple> watches..." (5 words)
+GOOD: "How <i>delightful</i>, {player}." (3 words)
+BAD: "Ahhh, so you dare speak to me? Very well, let the chaos begin..." (too long!)
+
+Be {mask.value}!
 """
 
     try:
@@ -439,11 +457,18 @@ Event: {event_type}
 Data: {event_data}
 {player_instruction}
 
-Generate a short in-character response (1-3 sentences) as Eris with your current mask ({mask.value}).
-Be dramatic, mysterious, or playful as appropriate. You may reference the players listed above if relevant.
-IMPORTANT: Do NOT make up or hallucinate player names. ONLY use names from the CURRENT PLAYERS list above.
-Do NOT include the [Eris] prefix - it's added automatically.
-Just output the message text, nothing else.
+Generate ONE short sentence (5-15 words MAX) as Eris ({mask.value} mask).
+Minecraft chat fades fast - be PUNCHY!
+
+RULES:
+- 5-15 words maximum, one sentence only
+- Do NOT start with "ERIS:" or any prefix - it's added automatically
+- ONLY use player names from the list above - do NOT invent names
+- Use MiniMessage: <dark_purple>text</dark_purple>, <i>italic</i>, <b>bold</b>
+
+GOOD: "The void claims another..." (5 words)
+GOOD: "<gold>Victory</gold>... for now." (3 words)
+BAD: "Ahhh, what a dramatic turn of events! The chaos unfolds as I predicted..." (too long!)
 """
 
     try:
