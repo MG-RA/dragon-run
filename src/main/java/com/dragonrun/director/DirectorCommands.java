@@ -25,6 +25,7 @@ import org.bukkit.inventory.ItemStack;
 import org.bukkit.inventory.meta.FireworkMeta;
 import org.bukkit.potion.PotionEffect;
 import org.bukkit.potion.PotionEffectType;
+import org.bukkit.Particle;
 
 /**
  * Brigadier commands for the Director AI system.
@@ -337,6 +338,60 @@ public class DirectorCommands {
                                     return executeAuraModify(ctx.getSource(), player, amount, reason);
                                 })
                             )
+                        )
+                    )
+                )
+                .then(Commands.literal("lookat")
+                    .then(Commands.literal("position")
+                        .then(Commands.argument("player", StringArgumentType.word())
+                            .then(Commands.argument("x", IntegerArgumentType.integer())
+                                .then(Commands.argument("y", IntegerArgumentType.integer())
+                                    .then(Commands.argument("z", IntegerArgumentType.integer())
+                                        .executes(ctx -> {
+                                            String player = StringArgumentType.getString(ctx, "player");
+                                            int x = IntegerArgumentType.getInteger(ctx, "x");
+                                            int y = IntegerArgumentType.getInteger(ctx, "y");
+                                            int z = IntegerArgumentType.getInteger(ctx, "z");
+                                            return executeLookAtPosition(ctx.getSource(), player, x, y, z);
+                                        })
+                                    )
+                                )
+                            )
+                        )
+                    )
+                    .then(Commands.literal("entity")
+                        .then(Commands.argument("player", StringArgumentType.word())
+                            .then(Commands.argument("target", StringArgumentType.word())
+                                .executes(ctx -> {
+                                    String player = StringArgumentType.getString(ctx, "player");
+                                    String target = StringArgumentType.getString(ctx, "target");
+                                    return executeLookAtEntity(ctx.getSource(), player, target);
+                                })
+                            )
+                        )
+                    )
+                )
+                .then(Commands.literal("particles")
+                    .then(Commands.argument("particleArgs", StringArgumentType.greedyString())
+                        .executes(ctx -> {
+                            String args = StringArgumentType.getString(ctx, "particleArgs");
+                            String[] parts = args.split(" ");
+                            String particle = parts[0];
+                            String nearPlayer = parts[1];
+                            int count = parts.length > 2 ? Integer.parseInt(parts[2]) : 20;
+                            double spread = parts.length > 3 ? Double.parseDouble(parts[3]) : 1.0;
+                            return executeSpawnParticles(ctx.getSource(), particle, nearPlayer, count, spread);
+                        })
+                    )
+                )
+                .then(Commands.literal("fakedeath")
+                    .then(Commands.argument("player", StringArgumentType.word())
+                        .then(Commands.argument("cause", StringArgumentType.word())
+                            .executes(ctx -> {
+                                String player = StringArgumentType.getString(ctx, "player");
+                                String cause = StringArgumentType.getString(ctx, "cause");
+                                return executeFakeDeath(ctx.getSource(), player, cause);
+                            })
                         )
                     )
                 )
@@ -916,5 +971,137 @@ public class DirectorCommands {
         // Check ground below (must be solid, not air/water/lava)
         Material groundBlock = world.getBlockAt(x, y - 1, z).getType();
         return groundBlock.isSolid() && groundBlock != Material.LAVA && groundBlock != Material.WATER;
+    }
+
+    private int executeLookAtPosition(CommandSourceStack source, String playerName, int x, int y, int z) {
+        Player player = Bukkit.getPlayer(playerName);
+        if (player == null) {
+            source.getSender().sendMessage(Component.text("Player not found: " + playerName, NamedTextColor.RED));
+            return 0;
+        }
+
+        Location targetLoc = new Location(player.getWorld(), x + 0.5, y + 0.5, z + 0.5);
+        Location playerLoc = player.getLocation();
+
+        // Calculate direction vector from player to target
+        double dx = targetLoc.getX() - playerLoc.getX();
+        double dy = targetLoc.getY() - playerLoc.getY();
+        double dz = targetLoc.getZ() - playerLoc.getZ();
+
+        // Calculate yaw and pitch
+        double distance = Math.sqrt(dx * dx + dz * dz);
+        float yaw = (float) Math.toDegrees(Math.atan2(-dx, dz));
+        float pitch = (float) Math.toDegrees(-Math.atan2(dy, distance));
+
+        // Set player's view direction
+        playerLoc.setYaw(yaw);
+        playerLoc.setPitch(pitch);
+        player.teleport(playerLoc);
+
+        source.getSender().sendMessage(Component.text(
+            playerName + " is now looking at (" + x + ", " + y + ", " + z + ")",
+            NamedTextColor.GREEN
+        ));
+        return 1;
+    }
+
+    private int executeLookAtEntity(CommandSourceStack source, String playerName, String targetName) {
+        Player player = Bukkit.getPlayer(playerName);
+        if (player == null) {
+            source.getSender().sendMessage(Component.text("Player not found: " + playerName, NamedTextColor.RED));
+            return 0;
+        }
+
+        Player target = Bukkit.getPlayer(targetName);
+        if (target == null) {
+            source.getSender().sendMessage(Component.text("Target player not found: " + targetName, NamedTextColor.RED));
+            return 0;
+        }
+
+        Location playerLoc = player.getLocation();
+        Location targetLoc = target.getLocation();
+
+        // Calculate direction vector from player to target (aim at eye level)
+        double dx = targetLoc.getX() - playerLoc.getX();
+        double dy = (targetLoc.getY() + 1.62) - (playerLoc.getY() + 1.62); // Eye height
+        double dz = targetLoc.getZ() - playerLoc.getZ();
+
+        // Calculate yaw and pitch
+        double distance = Math.sqrt(dx * dx + dz * dz);
+        float yaw = (float) Math.toDegrees(Math.atan2(-dx, dz));
+        float pitch = (float) Math.toDegrees(-Math.atan2(dy, distance));
+
+        // Set player's view direction
+        playerLoc.setYaw(yaw);
+        playerLoc.setPitch(pitch);
+        player.teleport(playerLoc);
+
+        source.getSender().sendMessage(Component.text(
+            playerName + " is now looking at " + targetName,
+            NamedTextColor.GREEN
+        ));
+        return 1;
+    }
+
+    private int executeSpawnParticles(CommandSourceStack source, String particleName, String playerName, int count, double spread) {
+        Player player = Bukkit.getPlayer(playerName);
+        if (player == null) {
+            source.getSender().sendMessage(Component.text("Player not found: " + playerName, NamedTextColor.RED));
+            return 0;
+        }
+
+        // Parse particle type
+        Particle particle;
+        try {
+            particle = Particle.valueOf(particleName.toUpperCase());
+        } catch (IllegalArgumentException e) {
+            source.getSender().sendMessage(Component.text("Invalid particle: " + particleName, NamedTextColor.RED));
+            return 0;
+        }
+
+        Location loc = player.getLocation().add(0, 1, 0); // Spawn at player's torso height
+        World world = player.getWorld();
+
+        // Spawn particles in a sphere around the player
+        world.spawnParticle(particle, loc, count, spread, spread, spread, 0.0);
+
+        source.getSender().sendMessage(Component.text(
+            "Spawned " + count + " " + particleName + " particles near " + playerName,
+            NamedTextColor.GREEN
+        ));
+        return 1;
+    }
+
+    private int executeFakeDeath(CommandSourceStack source, String playerName, String cause) {
+        Player player = Bukkit.getPlayer(playerName);
+        if (player == null) {
+            source.getSender().sendMessage(Component.text("Player not found: " + playerName, NamedTextColor.RED));
+            return 0;
+        }
+
+        // Create fake death message based on cause
+        String deathMessage = switch (cause.toLowerCase()) {
+            case "fell" -> playerName + " fell from a high place";
+            case "lava" -> playerName + " tried to swim in lava";
+            case "fire" -> playerName + " went up in flames";
+            case "suffocated" -> playerName + " suffocated in a wall";
+            case "drowned" -> playerName + " drowned";
+            case "exploded" -> playerName + " blew up";
+            case "magic" -> playerName + " was killed by magic";
+            case "wither" -> playerName + " withered away";
+            case "anvil" -> playerName + " was squashed by a falling anvil";
+            case "lightning" -> playerName + " was struck by lightning";
+            case "kinetic" -> playerName + " experienced kinetic energy";
+            case "void" -> playerName + " fell out of the world";
+            default -> playerName + " died";
+        };
+
+        // Broadcast fake death message
+        MiniMessage miniMessage = MiniMessage.miniMessage();
+        Component fakeDeathComponent = miniMessage.deserialize("<dark_gray>" + deathMessage + "</dark_gray>");
+        Bukkit.broadcast(fakeDeathComponent);
+
+        source.getSender().sendMessage(Component.text("Broadcast fake death for " + playerName, NamedTextColor.GREEN));
+        return 1;
     }
 }

@@ -21,6 +21,9 @@ from .schemas import (
     ModifyAuraArgs,
     SpawnTNTArgs,
     SpawnFallingBlockArgs,
+    ForceLookAtArgs,
+    SpawnParticlesArgs,
+    FakeDeathArgs,
 )
 
 if TYPE_CHECKING:
@@ -189,6 +192,50 @@ def create_game_tools(ws_client: "GameStateClient") -> List:
         )
         return f"Spawned {count} falling {block_type} {height} blocks above {near_player}."
 
+    @tool("force_look_at", args_schema=ForceLookAtArgs)
+    async def force_look_at(player: str, mode: str, x: int | None = None, y: int | None = None, z: int | None = None, target: str | None = None):
+        """Force a player's camera to look at coordinates or another player. Use to reveal hidden structures (fortress they missed), redirect attention (creeper behind them), or create dramatic moments (make them witness a teammate in danger). Works through walls - perfect for foreshadowing."""
+        if mode == "position" and x is not None and y is not None and z is not None:
+            logger.info(f"🔧 Tool: force_look_at(player={player}, position=({x}, {y}, {z}))")
+            await ws_client.send_command(
+                "lookat_position",
+                {"player": player, "x": x, "y": y, "z": z},
+                reason="Eris Camera Control"
+            )
+            return f"Forced {player} to look at ({x}, {y}, {z})."
+        elif mode == "entity" and target is not None:
+            logger.info(f"🔧 Tool: force_look_at(player={player}, entity={target})")
+            await ws_client.send_command(
+                "lookat_entity",
+                {"player": player, "target": target},
+                reason="Eris Camera Control"
+            )
+            return f"Forced {player} to look at {target}."
+        else:
+            return "Invalid arguments: position mode needs x/y/z, entity mode needs target."
+
+    @tool("spawn_particles", args_schema=SpawnParticlesArgs)
+    async def spawn_particles(particle: str, near_player: str, count: int = 20, spread: float = 1.0):
+        """Spawn particle effects for atmosphere, warnings, or celebrations. 'soul' for ominous moments, 'dragon_breath' when near End, 'explosion' as danger warning, 'portal' when nether portal is nearby, 'heart' for achievements, 'angry_villager' when upset, 'sculk_soul' for death foreshadowing. Purely visual - doesn't hurt players."""
+        logger.info(f"🔧 Tool: spawn_particles(type={particle}, target={near_player}, count={count}, spread={spread})")
+        await ws_client.send_command(
+            "spawn_particles",
+            {"particle": particle, "nearPlayer": near_player, "count": count, "spread": spread},
+            reason="Eris Particles"
+        )
+        return f"Spawned {count} {particle} particles near {player}."
+
+    @tool("fake_death", args_schema=FakeDeathArgs)
+    async def fake_death(player: str, cause: str = "fell"):
+        """Broadcast a realistic fake death message in chat. Player is NOT actually dead - this is pure psychological warfare. Creates panic, tests team communication, forces players to verify teammate status. Best used when they're separated or in dangerous situations. Use 'lava' in Nether, 'void' in End, 'fell' anywhere."""
+        logger.info(f"🔧 Tool: fake_death(player={player}, cause={cause})")
+        await ws_client.send_command(
+            "fake_death",
+            {"player": player, "cause": cause},
+            reason="Eris Deception"
+        )
+        return f"Broadcast fake death for {player} ({cause})."
+
     return [
         spawn_mob,
         give_item,
@@ -206,4 +253,7 @@ def create_game_tools(ws_client: "GameStateClient") -> List:
         modify_aura,
         spawn_tnt,
         spawn_falling_block,
+        force_look_at,
+        spawn_particles,
+        fake_death,
     ]

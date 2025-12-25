@@ -177,3 +177,40 @@ class SpawnFallingBlockArgs(BaseModel):
     near_player: str = Field(..., description="Target player name")
     count: int = Field(default=1, ge=1, le=8, description="Number of blocks (1-8)")
     height: int = Field(default=15, ge=5, le=30, description="Height above player to spawn (5-30 blocks)")
+
+
+class ForceLookAtArgs(BaseModel):
+    """Arguments for forcing a player to look at a position or entity."""
+
+    player: str = Field(..., description="Player to control camera")
+    mode: Literal["position", "entity"] = Field(..., description="Look at position or entity")
+    x: int | None = Field(default=None, description="X coordinate (for position mode)")
+    y: int | None = Field(default=None, description="Y coordinate (for position mode)")
+    z: int | None = Field(default=None, description="Z coordinate (for position mode)")
+    target: str | None = Field(default=None, description="Target player name (for entity mode)")
+
+
+class SpawnParticlesArgs(BaseModel):
+    """Arguments for spawning particle effects."""
+
+    particle: Literal[
+        "soul", "soul_fire_flame", "smoke", "large_smoke", "flame", "lava",
+        "dripping_water", "falling_water", "portal", "reverse_portal", "enchant",
+        "crit", "explosion", "firework", "heart", "angry_villager",
+        "happy_villager", "mycelium", "enchanted_hit", "note", "witch",
+        "dragon_breath", "end_rod", "damage_indicator", "sweep_attack",
+        "falling_dust", "sculk_soul", "sculk_charge", "sonic_boom", "shriek"
+    ] = Field(..., description="Particle type to spawn")
+    near_player: str = Field(..., description="Target player name")
+    count: int = Field(default=20, ge=1, le=100, description="Number of particles (1-100)")
+    spread: float = Field(default=1.0, ge=0.0, le=5.0, description="Spread radius in blocks")
+
+
+class FakeDeathArgs(BaseModel):
+    """Arguments for broadcasting a fake death message."""
+
+    player: str = Field(..., description="Player to fake death for")
+    cause: Literal[
+        "fell", "lava", "fire", "suffocated", "drowned", "exploded",
+        "magic", "wither", "anvil", "lightning", "kinetic", "void"
+    ] = Field(default="fell", description="Fake death cause")

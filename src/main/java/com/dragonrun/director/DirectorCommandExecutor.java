@@ -179,6 +179,30 @@ public class DirectorCommandExecutor {
                 int height = params.has("height") ? params.get("height").getAsInt() : 15;
                 yield "director spawn falling " + blockType + " near " + nearPlayer + " " + count + " " + height;
             }
+            case "lookat_position" -> {
+                String player = params.get("player").getAsString();
+                int x = params.get("x").getAsInt();
+                int y = params.get("y").getAsInt();
+                int z = params.get("z").getAsInt();
+                yield "director lookat position " + player + " " + x + " " + y + " " + z;
+            }
+            case "lookat_entity" -> {
+                String player = params.get("player").getAsString();
+                String target = params.get("target").getAsString();
+                yield "director lookat entity " + player + " " + target;
+            }
+            case "spawn_particles" -> {
+                String particle = params.get("particle").getAsString();
+                String nearPlayer = params.get("nearPlayer").getAsString();
+                int count = params.has("count") ? params.get("count").getAsInt() : 20;
+                double spread = params.has("spread") ? params.get("spread").getAsDouble() : 1.0;
+                yield "director particles " + particle + " " + nearPlayer + " " + count + " " + spread;
+            }
+            case "fake_death" -> {
+                String player = params.get("player").getAsString();
+                String cause = params.has("cause") ? params.get("cause").getAsString() : "fell";
+                yield "director fakedeath " + player + " " + cause;
+            }
             default -> null;
         };
     }
