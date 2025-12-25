@@ -129,6 +129,31 @@ class ShortTermMemory:
                 title = data.get("title", "achievement")
                 aura = data.get("auraReward", 0)
                 lines.append(f"🏅 {player} unlocked: {title} (+{aura} aura)")
+            elif event_type == "item_collected":
+                player = data.get("player", "Unknown")
+                item = data.get("itemType", "item").replace("_", " ").lower()
+                qty = data.get("quantity", 1)
+                is_enchanted = data.get("isEnchanted", False)
+                if is_enchanted:
+                    lines.append(f"✨ {player} picked up enchanted {item}")
+                else:
+                    lines.append(f"📦 {player} picked up {qty}x {item}")
+            elif event_type == "entity_leashed":
+                player = data.get("player", "Unknown")
+                entity = data.get("entityType", "creature").replace("_", " ")
+                entity_name = data.get("entityName")
+                if entity_name:
+                    lines.append(f"🐕 {player} leashed {entity_name} ({entity})")
+                else:
+                    lines.append(f"🐕 {player} leashed a {entity}")
+            elif event_type == "vehicle_entered":
+                player = data.get("player", "Unknown")
+                vehicle = data.get("vehicleType", "vehicle").replace("_", " ")
+                lines.append(f"🚗 {player} entered a {vehicle}")
+            elif event_type == "vehicle_exited":
+                player = data.get("player", "Unknown")
+                vehicle = data.get("vehicleType", "vehicle").replace("_", " ")
+                lines.append(f"🚗 {player} exited a {vehicle}")
 
         return "\n".join(lines[-30:])  # Last 30 events max
 

@@ -50,6 +50,10 @@ async def event_classifier(state: ErisState) -> Dict[str, Any]:
         # Low - rarely speak
         "mob_kills_batch": EventPriority.LOW,
         "state": EventPriority.LOW,
+        "item_collected": EventPriority.LOW,
+        "entity_leashed": EventPriority.LOW,
+        "vehicle_entered": EventPriority.LOW,
+        "vehicle_exited": EventPriority.LOW,
     }
 
     priority = priority_map.get(event_type, EventPriority.ROUTINE)

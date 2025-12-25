@@ -41,6 +41,9 @@ public class DragonRunPlugin extends JavaPlugin {
     private com.dragonrun.listeners.MobKillListener mobKillListener;
     private com.dragonrun.listeners.StructureDiscoveryListener structureDiscoveryListener;
     private com.dragonrun.listeners.MinecraftAdvancementListener minecraftAdvancementListener;
+    private com.dragonrun.listeners.InventoryListener inventoryListener;
+    private com.dragonrun.listeners.EntityInteractionListener entityInteractionListener;
+    private com.dragonrun.listeners.VehicleListener vehicleListener;
     private DirectorWebSocketServer directorServer;
 
     @Override
@@ -88,6 +91,12 @@ public class DragonRunPlugin extends JavaPlugin {
         getServer().getPluginManager().registerEvents(structureDiscoveryListener, this);
         minecraftAdvancementListener = new com.dragonrun.listeners.MinecraftAdvancementListener(this);
         getServer().getPluginManager().registerEvents(minecraftAdvancementListener, this);
+        inventoryListener = new com.dragonrun.listeners.InventoryListener(this);
+        getServer().getPluginManager().registerEvents(inventoryListener, this);
+        entityInteractionListener = new com.dragonrun.listeners.EntityInteractionListener(this);
+        getServer().getPluginManager().registerEvents(entityInteractionListener, this);
+        vehicleListener = new com.dragonrun.listeners.VehicleListener(this);
+        getServer().getPluginManager().registerEvents(vehicleListener, this);
 
         // 6. Register commands using Paper's lifecycle events
         registerCommands();
