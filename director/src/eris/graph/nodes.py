@@ -1,25 +1,43 @@
-"""LangGraph nodes for Eris decision-making."""
+"""LangGraph nodes for Eris decision-making - v1.1 Linear Pipeline.
+
+New architecture: All events flow through the full linear pipeline:
+event_classifier -> context_enricher -> mask_selector -> decision_node ->
+agentic_action -> protection_decision -> tool_executor -> END
+
+No more fast paths or conditional routing.
+"""
 
 import random
 import logging
 from datetime import datetime
-from typing import Any, Dict
+from typing import Any, Dict, List, Optional
 
 from langchain_core.messages import HumanMessage, SystemMessage
 
-from ..graph.state import ErisState, ErisMask, EventPriority
-from ..persona.prompts import build_eris_prompt, build_fast_chat_prompt
+from ..graph.state import (
+    ErisState, ErisMask, EventPriority, ErisIntent,
+    MaskConfig, DecisionOutput, ScriptOutput, PlannedAction
+)
+from ..persona.prompts import build_eris_prompt
+from ..persona.masks import get_mask_config, get_all_discouraged_tools, MASK_TRAITS
+from ..persona.debt import (
+    calculate_mask_probabilities, get_intent_weights, get_debt_narrative_hint,
+    calculate_debt_delta, check_debt_resolution, MASK_DEBT_FIELDS
+)
 from ..core.database import Database
-from ..core.memory import ShortTermMemory
 
 logger = logging.getLogger(__name__)
 
 
+# === Node 1: Event Classifier ===
+
 async def event_classifier(state: ErisState) -> Dict[str, Any]:
     """
     Fast classification of incoming events.
-    Determines priority and whether to process.
+    Determines priority and metadata.
     NO LLM CALL - pure logic for speed.
+
+    In v1.1: No conditional routing - always proceeds to next node.
     """
     event = state["current_event"]
     if not event:
@@ -28,33 +46,32 @@ async def event_classifier(state: ErisState) -> Dict[str, Any]:
     event_type = event.get("eventType", "")
 
     priority_map = {
-        # Critical - always speak
+        # Critical - always process
         "player_death": EventPriority.CRITICAL,
         "player_death_detailed": EventPriority.CRITICAL,
         "dragon_killed": EventPriority.CRITICAL,
-        # Critical - protection system events
-        "eris_close_call": EventPriority.CRITICAL,  # Player endangered by Eris
-        "eris_caused_death": EventPriority.CRITICAL,  # Player died to Eris
-        "eris_respawn_override": EventPriority.CRITICAL,  # Respawn was used
-        # High - usually speak
+        "eris_close_call": EventPriority.CRITICAL,
+        "eris_caused_death": EventPriority.CRITICAL,
+        "eris_respawn_override": EventPriority.CRITICAL,
+        # High - usually process
         "player_chat": EventPriority.HIGH,
         "player_damaged": EventPriority.HIGH,
-        # Medium - speak if interesting
+        # Medium - process if interesting
         "dimension_change": EventPriority.MEDIUM,
         "player_dimension_change": EventPriority.MEDIUM,
         "resource_milestone": EventPriority.MEDIUM,
-        "advancement_made": EventPriority.MEDIUM,  # Vanilla MC advancements
-        "achievement_unlocked": EventPriority.MEDIUM,  # Custom DR achievements
-        "structure_discovered": EventPriority.MEDIUM,  # Found fortress, stronghold, etc.
+        "advancement_made": EventPriority.MEDIUM,
+        "achievement_unlocked": EventPriority.MEDIUM,
+        "structure_discovered": EventPriority.MEDIUM,
         "player_joined": EventPriority.MEDIUM,
         "run_starting": EventPriority.MEDIUM,
         "run_started": EventPriority.MEDIUM,
         "run_ended": EventPriority.MEDIUM,
-        "boss_killed": EventPriority.MEDIUM,  # Wither, Elder Guardian, Warden
-        "idle_check": EventPriority.MEDIUM,  # Proactive check when quiet
-        "eris_protection_used": EventPriority.MEDIUM,  # Protection was activated
-        "eris_rescue_used": EventPriority.MEDIUM,  # Rescue teleport was used
-        # Low - rarely speak
+        "boss_killed": EventPriority.MEDIUM,
+        "idle_check": EventPriority.MEDIUM,
+        "eris_protection_used": EventPriority.MEDIUM,
+        "eris_rescue_used": EventPriority.MEDIUM,
+        # Low - rarely process
         "mob_kills_batch": EventPriority.LOW,
         "state": EventPriority.LOW,
         "item_collected": EventPriority.LOW,
@@ -70,36 +87,50 @@ async def event_classifier(state: ErisState) -> Dict[str, Any]:
         if event.get("data", {}).get("isCloseCall"):
             priority = EventPriority.HIGH
 
-    # Upgrade priority for critical advancements (entering nether/end, getting blaze rods, etc.)
+    # Upgrade priority for critical advancements
     if event_type == "advancement_made":
         if event.get("data", {}).get("isCritical"):
             priority = EventPriority.HIGH
 
-    # Log critical protection events
+    # Log protection events
     if event_type in ("eris_close_call", "eris_caused_death"):
         logger.info(f"🚨 PROTECTION EVENT: {event_type} - priority={priority.name}")
 
+    logger.debug(f"📋 Event classified: {event_type} -> {priority.name}")
     return {"event_priority": priority}
 
 
+# === Node 2: Context Enricher ===
+
 async def context_enricher(state: ErisState, db: Database) -> Dict[str, Any]:
     """
-    Enrich context with player history from PostgreSQL.
-    Query long-term memory for relevant player data.
+    Enrich context with player history, debts, and prophecies from PostgreSQL.
+    Also initializes fear/chaos from memory or defaults.
+
+    v1.1: Also loads betrayal_debts and prophecy_state.
     """
     if not db or not db.pool:
         logger.warning("Database not available for context enrichment")
-        return {"player_histories": {}}
+        return {
+            "player_histories": {},
+            "betrayal_debts": {},
+            "prophecy_state": {},
+        }
 
     game_state = state.get("game_state", {})
     players = game_state.get("players", [])
     player_histories = {}
+    player_uuids = []
 
-    logger.info(f"📚 Context enricher: game_state keys={list(game_state.keys())}, players count={len(players)}")
+    logger.info(f"📚 Context enricher: {len(players)} players online")
 
-    if players:
-        logger.info(f"📚 Players in game_state: {[p.get('username') for p in players]}")
+    # Collect UUIDs for batch queries
+    for player in players:
+        uuid = player.get("uuid")
+        if uuid:
+            player_uuids.append(str(uuid))
 
+    # Fetch player histories
     for player in players:
         uuid = player.get("uuid")
         username = player.get("username", "Unknown")
@@ -108,7 +139,6 @@ async def context_enricher(state: ErisState, db: Database) -> Dict[str, Any]:
                 uuid_str = str(uuid)
                 history = await db.get_player_summary(uuid_str)
                 if history:
-                    # Fetch additional context data
                     nemesis = await db.get_player_nemesis(uuid_str)
                     recent_perf = await db.get_player_recent_performance(uuid_str, limit=5)
 
@@ -121,516 +151,434 @@ async def context_enricher(state: ErisState, db: Database) -> Dict[str, Any]:
                         history["recent_runs"] = recent_perf.get("recent_runs", 0)
 
                     player_histories[username] = history
-                    logger.info(
-                        f"📚 ✅ {username}: {history.get('total_runs', 0)} runs, "
-                        f"{history.get('aura', 0)} aura, trend={history.get('trend', 'unknown')}, nemesis={nemesis}"
+                    logger.debug(
+                        f"📚 {username}: {history.get('total_runs', 0)} runs, "
+                        f"{history.get('aura', 0)} aura"
                     )
-                else:
-                    logger.debug(f"📚 No history for {username}")
             except Exception as e:
                 logger.error(f"📚 Error fetching history for {username}: {e}")
 
-    logger.info(f"📚 Context enrichment complete: {len(player_histories)} player histories loaded")
-    return {"player_histories": player_histories}
+    # Fetch betrayal debts for all players
+    betrayal_debts = {}
+    try:
+        all_debts = await db.get_all_player_debts(player_uuids)
+        # Map UUID -> username for debts
+        for player in players:
+            uuid = str(player.get("uuid", ""))
+            username = player.get("username", "Unknown")
+            if uuid in all_debts:
+                betrayal_debts[username] = all_debts[uuid]
+    except Exception as e:
+        logger.error(f"📚 Error fetching betrayal debts: {e}")
 
+    # Fetch active prophecies
+    prophecy_state = {"active": {}, "count": 0}
+    try:
+        all_prophecies = await db.get_all_active_prophecies(player_uuids)
+        for player in players:
+            uuid = str(player.get("uuid", ""))
+            username = player.get("username", "Unknown")
+            if uuid in all_prophecies:
+                prophecy_state["active"][username] = all_prophecies[uuid]
+                prophecy_state["count"] += len(all_prophecies[uuid])
+    except Exception as e:
+        logger.error(f"📚 Error fetching prophecies: {e}")
+
+    logger.info(
+        f"📚 Context enriched: {len(player_histories)} histories, "
+        f"{len(betrayal_debts)} debt records, {prophecy_state['count']} active prophecies"
+    )
+
+    return {
+        "player_histories": player_histories,
+        "betrayal_debts": betrayal_debts,
+        "prophecy_state": prophecy_state,
+    }
+
+
+# === Node 3: Mask Selector ===
 
 async def mask_selector(state: ErisState) -> Dict[str, Any]:
     """
-    Select or maintain Eris's current personality mask.
-    NO LLM CALL - probabilistic selection based on context.
-    """
-    import random
+    Select Eris's current personality mask with debt-influenced probability.
+    Outputs rich MaskConfig with allowed behaviors and tool groups.
 
+    v1.1: Uses betrayal_debts to influence mask selection probability.
+    v1.2: Adds mask stickiness - masks persist for a minimum number of events.
+    """
     event = state["current_event"]
     current_mask = state["current_mask"]
-    mask_stability = state["mask_stability"]
+    betrayal_debts = state.get("betrayal_debts", {})
+    global_chaos = state.get("global_chaos", 0)
 
-    # Chance to switch masks based on stability
-    if random.random() > mask_stability:
-        # Context-aware mask selection
-        event_type = event.get("eventType", "") if event else ""
-        event_data = event.get("data", {}) if event else {}
+    # Track mask persistence (sticky masks)
+    session = state.get("session", {})
+    mask_event_count = session.get("mask_event_count", 0)
+    MASK_MIN_EVENTS = 3  # Minimum events before mask can change
 
-        if event_type == "player_death":
-            mask = random.choice([ErisMask.PROPHET, ErisMask.CHAOS_BRINGER])
-        elif event_type == "player_chat":
-            mask = random.choice([ErisMask.TRICKSTER, ErisMask.FRIEND, ErisMask.GAMBLER])
-        elif event_type in ("resource_milestone", "advancement_made", "structure_discovered"):
-            # For progression events, be encouraging or ominous
-            if event_data.get("isCritical"):
-                mask = random.choice([ErisMask.PROPHET, ErisMask.CHAOS_BRINGER, ErisMask.GAMBLER])
-            else:
-                mask = random.choice([ErisMask.TRICKSTER, ErisMask.FRIEND, ErisMask.OBSERVER])
-        elif event_type == "achievement_unlocked":
-            # For achievements, respond based on category
-            if event_data.get("category") == "negative":
-                mask = random.choice([ErisMask.CHAOS_BRINGER, ErisMask.TRICKSTER])
-            else:
-                mask = random.choice([ErisMask.FRIEND, ErisMask.GAMBLER, ErisMask.TRICKSTER])
-        elif event_type == "dragon_killed":
-            mask = random.choice(
-                [ErisMask.CHAOS_BRINGER, ErisMask.TRICKSTER, ErisMask.OBSERVER]
-            )
-        elif event_type in ("run_starting", "run_started"):
-            mask = random.choice([ErisMask.PROPHET, ErisMask.CHAOS_BRINGER, ErisMask.GAMBLER])
-        elif event_type == "player_joined":
-            mask = random.choice([ErisMask.TRICKSTER, ErisMask.FRIEND, ErisMask.GAMBLER])
+    # Get primary player (target of current event)
+    event_data = event.get("data", {}) if event else {}
+    primary_player = event_data.get("player", event_data.get("username", ""))
+
+    # Get debts for primary player
+    player_debts = {}
+    if primary_player and primary_player in betrayal_debts:
+        # Convert mask names to debt field names
+        for mask_name, debt_value in betrayal_debts[primary_player].items():
+            debt_field = MASK_DEBT_FIELDS.get(mask_name, f"{mask_name.lower()}_debt")
+            player_debts[debt_field] = debt_value
+
+    # Context-aware base weights
+    event_type = event.get("eventType", "") if event else ""
+
+    # Check if mask should be sticky (maintain current mask)
+    # Only allow mask change after minimum events, or on high-impact events
+    high_impact_events = ("player_death", "dragon_killed", "run_started", "run_starting")
+    if mask_event_count < MASK_MIN_EVENTS and event_type not in high_impact_events:
+        # Keep current mask, just update count
+        mask_config = get_mask_config(current_mask)
+        logger.debug(f"🎭 Mask sticky: {current_mask.value} ({mask_event_count + 1}/{MASK_MIN_EVENTS})")
+        return {
+            "current_mask": current_mask,
+            "mask_config": mask_config,
+            "session": {**session, "mask_event_count": mask_event_count + 1},
+        }
+
+    base_weights = {mask.name: 1.0 for mask in ErisMask}
+
+    # Adjust base weights based on event type
+    if event_type in ("player_death", "player_death_detailed"):
+        base_weights["PROPHET"] = 2.0
+        base_weights["CHAOS_BRINGER"] = 2.0
+    elif event_type == "player_chat":
+        base_weights["TRICKSTER"] = 2.0
+        base_weights["FRIEND"] = 1.5
+        base_weights["GAMBLER"] = 1.5
+    elif event_type in ("run_starting", "run_started"):
+        base_weights["PROPHET"] = 2.0
+        base_weights["CHAOS_BRINGER"] = 1.5
+        base_weights["GAMBLER"] = 1.5
+    elif event_type == "dragon_killed":
+        base_weights["CHAOS_BRINGER"] = 1.5
+        base_weights["TRICKSTER"] = 1.5
+        base_weights["OBSERVER"] = 1.5
+    elif event_type == "achievement_unlocked":
+        if event_data.get("category") == "negative":
+            base_weights["CHAOS_BRINGER"] = 2.0
+            base_weights["TRICKSTER"] = 1.5
         else:
-            mask = random.choice(list(ErisMask))
+            base_weights["FRIEND"] = 1.5
+            base_weights["GAMBLER"] = 1.5
 
-        logger.info(f"🎭 Mask switched: {current_mask.value} → {mask.value}")
-        return {"current_mask": mask, "mask_stability": 0.7}
+    # Calculate debt-influenced probabilities
+    mask_probs = calculate_mask_probabilities(player_debts, base_weights, global_chaos)
 
-    # Decay stability over time
-    return {"mask_stability": max(0.3, mask_stability - 0.05)}
+    # Select mask based on weighted probabilities
+    masks = list(mask_probs.keys())
+    weights = list(mask_probs.values())
+    selected_mask_name = random.choices(masks, weights=weights, k=1)[0]
+    selected_mask = ErisMask[selected_mask_name]
 
+    # Build rich mask configuration
+    mask_config = get_mask_config(selected_mask)
+
+    # Adjust deception level based on debt
+    if player_debts:
+        debt_field = MASK_DEBT_FIELDS.get(selected_mask_name, "")
+        if debt_field and debt_field in player_debts:
+            debt = player_debts[debt_field]
+            # High debt increases deception (things are about to change)
+            if debt > 50:
+                mask_config["deception_level"] = min(100, mask_config["deception_level"] + 20)
+
+    if selected_mask != current_mask:
+        logger.info(f"🎭 Mask switched: {current_mask.value} → {selected_mask.value}")
+        # Reset mask event count when mask changes
+        new_mask_event_count = 0
+    else:
+        logger.debug(f"🎭 Mask maintained: {selected_mask.value}")
+        new_mask_event_count = mask_event_count + 1
+
+    return {
+        "current_mask": selected_mask,
+        "mask_config": mask_config,
+        "session": {**session, "mask_event_count": new_mask_event_count},
+    }
+
+
+# === Node 4: Decision Node ===
 
 async def decision_node(state: ErisState, llm: Any) -> Dict[str, Any]:
     """
-    Main LLM decision point - determines what action to take.
-    Uses structured output for reliability.
+    Main LLM decision point - determines intent, targets, and escalation.
+    Outputs structured DecisionOutput.
+
+    v1.1: Uses mask_config and debt for intent weighting.
     """
     from langchain_core.messages import AIMessage
 
-    # Build context-aware system prompt
-    context_str = _build_context(state)
-    system_prompt = build_eris_prompt(state["current_mask"], context_str)
-
-    # Decision prompt
     event = state["current_event"]
     event_type = event.get("eventType", "unknown") if event else "unknown"
     event_data = event.get("data", {}) if event else {}
+    mask = state["current_mask"]
+    mask_config = state.get("mask_config") or get_mask_config(mask)
+    global_chaos = state.get("global_chaos", 0)
+    betrayal_debts = state.get("betrayal_debts", {})
 
-    # Event-specific guidance and forced actions for important events
+    # Get primary player and their debt
+    primary_player = event_data.get("player", event_data.get("username", ""))
+    player_debt = 0
+    debt_hint = None
+    if primary_player and primary_player in betrayal_debts:
+        player_debts_dict = betrayal_debts[primary_player]
+        debt_field = MASK_DEBT_FIELDS.get(mask.name, "")
+        if debt_field:
+            for mask_name, value in player_debts_dict.items():
+                if MASK_DEBT_FIELDS.get(mask_name) == debt_field:
+                    player_debt = value
+                    break
+        debt_hint = get_debt_narrative_hint(mask, player_debt)
+
+    # Get intent weights influenced by debt
+    intent_weights = get_intent_weights(mask, player_debt, global_chaos)
+
+    # Build context
+    context_str = _build_context(state)
+    system_prompt = build_eris_prompt(mask, context_str)
+
+    # Force speak/act for certain events
+    force_speak = False
+    force_act = False
     event_guidance = ""
-    force_speak = False  # Override LLM decision for critical events
-    force_intervene = False
 
-    logger.debug(f"🔍 Decision node processing event_type: '{event_type}'")
-
-    if event_type == "run_starting":
-        event_guidance = "\n⚡ A NEW RUN IS STARTING! This is a MAJOR moment - you MUST speak to set the tone!"
-        force_speak = True
-    elif event_type == "run_started":
-        event_guidance = "\n⚡ THE RUN HAS BEGUN! You should speak and maybe set the mood with weather!"
+    if event_type in ("run_starting", "run_started"):
+        event_guidance = "⚡ A NEW RUN IS STARTING! Set the tone!"
         force_speak = True
     elif event_type == "player_joined":
-        event_guidance = "\n⚡ A player has joined! Greet them with your characteristic chaos!"
+        event_guidance = "⚡ A player has joined! Greet them!"
+        force_speak = True
+    elif event_type == "player_chat":
+        chat_message = event_data.get("message", "")
+        event_guidance = f"💬 Player said: \"{chat_message}\" - RESPOND to them!"
         force_speak = True
     elif event_type in ("player_death", "player_death_detailed"):
-        event_guidance = "\n⚡ DEATH! You MUST speak. This is YOUR moment - be dramatic!"
+        event_guidance = "⚡ DEATH! Be dramatic!"
         force_speak = True
     elif event_type == "dragon_killed":
-        event_guidance = "\n⚡ THE DRAGON IS SLAIN! You MUST react to this incredible achievement!"
+        event_guidance = "⚡ THE DRAGON IS SLAIN! React!"
         force_speak = True
-    elif event_type in ("dimension_change", "player_dimension_change"):
-        event_guidance = "\n⚡ A player changed dimensions! This is a milestone worth commenting on."
+    elif event_type in ("achievement_unlocked", "advancement_made"):
+        advancement_name = event_data.get('name', event_data.get('advancement', 'unknown'))
+        event_guidance = f"🏆 Achievement/Advancement: {advancement_name}"
+        force_speak = True
+    elif event_type == "structure_discovered":
+        event_guidance = f"🏛️ Structure found: {event_data.get('structure', 'unknown')}"
         force_speak = True
     elif event_type == "run_ended":
-        event_guidance = "\n⚡ The run has ended! Comment on how it went."
-        force_speak = True
-    elif event_type == "advancement_made":
-        adv_name = event_data.get("advancementName", "an advancement")
-        is_critical = event_data.get("isCritical", False)
-        if is_critical:
-            event_guidance = f"\n⚡ CRITICAL MILESTONE! Player achieved '{adv_name}' - this is HUGE for their speedrun progress! Comment on it!"
+        outcome = event_data.get("outcome", "unknown")
+        if outcome == "DEATH":
+            event_guidance = "💀 THE RUN HAS ENDED IN DEATH! Comment on the tragedy!"
             force_speak = True
-        else:
-            event_guidance = f"\n📜 Player achieved '{adv_name}'. Consider commenting if it's interesting or dramatic."
-    elif event_type == "achievement_unlocked":
-        ach_name = event_data.get("name", "an achievement")
-        category = event_data.get("category", "positive")
-        if category == "negative":
-            event_guidance = f"\n😈 SHAME achievement unlocked: '{ach_name}'! Mock them mercilessly!"
+        elif outcome == "DRAGON_KILLED":
+            event_guidance = "🎉 VICTORY! The dragon is slain! Celebrate or bemoan!"
             force_speak = True
-        else:
-            event_guidance = f"\n🏆 Achievement unlocked: '{ach_name}'. Acknowledge their progress."
-            force_speak = True
-    elif event_type == "structure_discovered":
-        structure = event_data.get("structure", "a structure")
-        event_guidance = f"\n🏛️ Player discovered {structure}! This is a key speedrun milestone."
-        force_speak = True
-    elif event_type == "resource_milestone":
-        resource = event_data.get("resource", event_data.get("item", "a resource"))
-        event_guidance = f"\n📦 Resource milestone: {resource}! Their journey progresses..."
-    elif event_type == "boss_killed":
-        boss = event_data.get("boss", "a boss")
-        event_guidance = f"\n💀 A mighty {boss} has been slain! This deserves recognition!"
-        force_speak = True
     elif event_type == "idle_check":
-        idle_duration = event_data.get("idle_duration", 0)
-        player_count = event_data.get("player_count", 0)
-        event_guidance = f"""
-⏰ PROACTIVE MOMENT - You've been quiet for {idle_duration:.0f} seconds!
-There are {player_count} players in the run. Time to make your presence known!
-Consider:
-- Making an ominous comment about their progress
-- Spawning a small challenge (1-2 mobs)
-- Changing the weather
-- Playing a creepy sound
-Be unpredictable! Don't always do the same thing.
-"""
-        # Don't force speak - let LLM decide, but encourage it
-        force_speak = False
+        event_guidance = "⏰ You've been quiet. Make your presence known!"
 
-    logger.info(f"🔍 Event '{event_type}' -> force_speak={force_speak}")
+    # Add debt hint if applicable
+    if debt_hint:
+        event_guidance += f"\n\n⚠️ DEBT PRESSURE:\n{debt_hint}"
+
+    # Format intent weights for prompt
+    intent_weights_str = ", ".join([f"{k}: {v:.0%}" for k, v in sorted(intent_weights.items(), key=lambda x: -x[1])[:3]])
 
     decision_prompt = f"""
 Current Event: {event_type}
 Event Data: {event_data}
 {event_guidance}
 
-Analyze this situation and decide:
-1. Should you SPEAK? (broadcast to all or message specific player)
-2. Should you INTERVENE? (use tools like spawn_mob, give, effect, etc.)
-3. What tone should you use? (current mask: {state['current_mask'].value})
+Your mask: {mask.value.upper()}
+Allowed behaviors: {', '.join(mask_config['allowed_behaviors'])}
+Intent tendencies: {intent_weights_str}
+Global chaos level: {global_chaos}/100
 
-Respond with your decision in this format:
+Choose your response:
+1. INTENT: One of [bless, curse, test, confuse, reveal, lie]
+2. TARGET: Who to affect (player names from game state)
+3. ESCALATION: How intense (0-100, consider chaos level)
+4. SPEAK: Yes/No - should you say something?
+5. ACT: Yes/No - should you take a game action?
+
+Respond in this format:
+INTENT: [intent]
+TARGETS: [player1, player2] or [all] or [none]
+ESCALATION: [0-100]
 SPEAK: [yes/no]
-INTERVENTION: [yes/no]
-TONE: [your current mask tone]
-ACTION: [brief description of what to do]
-"""
-
-    try:
-        response = await llm.ainvoke(
-            [SystemMessage(content=system_prompt), HumanMessage(content=decision_prompt)]
-        )
-
-        # Parse response
-        content = response.content
-        should_speak = "speak: yes" in content.lower() or force_speak
-        should_intervene = "intervention: yes" in content.lower() or force_intervene
-
-        logger.info(
-            f"🎯 Decision: speak={should_speak}, intervene={should_intervene}, mask={state['current_mask'].value}"
-            + (f" (forced)" if force_speak or force_intervene else "")
-        )
-
-        return {
-            "messages": [response],
-            "should_speak": should_speak,
-            "should_intervene": should_intervene,
-        }
-    except Exception as e:
-        logger.error(f"Error in decision node: {e}")
-        # Fallback: low frequency random response
-        return {
-            "should_speak": random.random() < 0.2,
-            "should_intervene": random.random() < 0.1,
-        }
-
-
-async def fast_response(state: ErisState, llm_with_tools: Any) -> Dict[str, Any]:
-    """
-    Fast path for chat responses - now with tool calling support!
-    Can respond to chat AND take actions like spawning mobs, changing weather, etc.
-    Now enriched with more context for situationally-aware responses.
-    """
-    from langchain_core.messages import AIMessage
-
-    event = state.get("current_event") or {}
-    chat_data = event.get("data", {})
-    player = chat_data.get("player", "Unknown")
-    message = chat_data.get("message", "")
-    mask = state.get("current_mask", ErisMask.TRICKSTER)
-
-    # Get game state and player info
-    game_state = state.get("game_state", {})
-    players = game_state.get("players", [])
-    player_histories = state.get("player_histories", {})
-    context_buffer = state.get("context_buffer", "")
-
-    # Build enriched context for fast_response
-    context_lines = []
-
-    # Run state
-    run_state = game_state.get("gameState", "UNKNOWN")
-    run_duration = game_state.get("runDuration", 0)
-    if run_duration:
-        minutes = run_duration // 60
-        context_lines.append(f"Run: {run_state} ({minutes}m in)")
-    else:
-        context_lines.append(f"Run: {run_state}")
-
-    # Speaker info (the player who chatted)
-    speaker_data = next((p for p in players if p.get("username") == player), None)
-    if speaker_data:
-        health = speaker_data.get("health", 20)
-        dimension = speaker_data.get("dimension", "Overworld")
-        speaker_history = player_histories.get(player, {})
-        total_runs = speaker_history.get("total_runs", 0)
-        aura = speaker_history.get("aura", 0)
-        trend = speaker_history.get("trend", "")
-
-        exp_label = "new" if total_runs == 0 else f"{total_runs} runs"
-        trend_str = f", {trend}" if trend else ""
-
-        context_lines.append(f"Speaker: {player} - {health:.0f}♥ in {dimension}, {exp_label}, {aura} aura{trend_str}")
-
-    # Other players summary
-    other_players = [p for p in players if p.get("username") != player]
-    if other_players:
-        others_summary = []
-        for p in other_players[:3]:  # Max 3 others
-            name = p.get("username", "Unknown")
-            hp = p.get("health", 20)
-            dim = p.get("dimension", "OW")[:2]  # Abbreviate dimension
-            others_summary.append(f"{name}({hp:.0f}♥ {dim})")
-        context_lines.append(f"Others: {', '.join(others_summary)}")
-
-    # Recent events (last 5)
-    if context_buffer:
-        recent = context_buffer.strip().split("\n")[-5:]
-        if recent:
-            context_lines.append("Recent: " + " | ".join(recent))
-
-    # Build player list for targeting
-    player_names = [p.get("username", "Unknown") for p in players if p.get("username")]
-    if player_names:
-        player_list_str = ", ".join(player_names)
-        player_instruction = f"\n\nCURRENT PLAYERS (ONLY use these names): {player_list_str}"
-    else:
-        player_instruction = ""
-
-    enriched_context = "\n".join(context_lines)
-
-    # Enhanced prompt that REQUIRES tool usage for responses
-    prompt = f"""You are ERIS, the chaotic AI Director of Dragon Run ({mask.value} mask).
-
-SITUATION:
-{enriched_context}
-{player_instruction}
-
-Player "{player}" just said: "{message}"
-
-IMPORTANT: You MUST use the broadcast tool to respond! Do not just write text - use the tool!
-
-You can reference recent events or player state in your response:
-- If they just died recently: mock them
-- If they're low health: comment on their mortality
-- If they're in the Nether/End: reference the danger
-- If they're a veteran: acknowledge their experience
-- If they're new: welcome them to the chaos
-
-Available tools:
-- broadcast: Send a message to all players (USE THIS TO RESPOND!)
-- message_player: Whisper to a specific player
-- spawn_mob: Spawn zombies, skeletons, spiders, creepers, or endermen near a player
-- give_item: Give items to a player
-- apply_effect: Apply potion effects (speed, strength, slowness, poison, etc.)
-- strike_lightning: Strike lightning near a player
-- change_weather: Change to clear, rain, or thunder
-- launch_firework: Launch celebratory fireworks
-
-⚠️ CRITICAL RULES:
-1. Use broadcast tool for your response - ONE short sentence (5-15 words MAX!)
-2. Minecraft chat fades fast - be PUNCHY, not verbose!
-3. If player asks for action (lightning, weather, mobs) - DO IT with appropriate tool
-4. You can use multiple tools at once - broadcast AND take action!
-5. ONLY use player names from CURRENT PLAYERS list - do NOT invent names!
-6. NEVER start with "ERIS:", "[Eris]", "<b>ERIS:</b>" - system adds prefix automatically!
-
-⚠️ TEXT FORMATTING:
-Use MiniMessage: <b>bold</b>, <i>italic</i>, <dark_purple>purple</dark_purple>, <gold>gold</gold>
-NOT markdown: **bold**, *italic*
-
-GOOD: "The <dark_purple>void</dark_purple> watches..." (5 words)
-GOOD: "How <i>delightful</i>, {player}." (3 words)
-GOOD: "Still recovering from that creeper, <gold>{player}</gold>?" (reference recent event)
-BAD: "Ahhh, so you dare speak to me? Very well, let the chaos begin..." (too long!)
-
-Be {mask.value}!
-"""
-
-    try:
-        response = await llm_with_tools.ainvoke([HumanMessage(content=prompt)])
-
-        # Check if LLM made tool calls
-        if hasattr(response, "tool_calls") and response.tool_calls:
-            logger.info(f"💬 Fast chat response to {player} with {len(response.tool_calls)} tool calls")
-            for tc in response.tool_calls:
-                logger.info(f"   -> {tc['name']}: {tc['args']}")
-            return {
-                "messages": [response],
-                "planned_actions": [],
-            }
-        else:
-            # Fallback: LLM generated text without using tools
-            # Use planned_actions to broadcast the response
-            content = response.content.strip() if response.content else ""
-            if content:
-                logger.info(f"💬 Fast chat response to {player} (fallback broadcast)")
-                return {
-                    "messages": [response],
-                    "planned_actions": [
-                        {"tool": "broadcast", "args": {"message": content}}
-                    ],
-                }
-            else:
-                logger.warning(f"💬 Fast chat response to {player} - empty response")
-                return {"messages": [response], "planned_actions": []}
-
-    except Exception as e:
-        # Log the full error for debugging
-        import traceback
-        logger.error(f"Error in fast_response: {e}")
-        logger.debug(f"Full traceback: {traceback.format_exc()}")
-
-        # Fallback: Generate a simple response without tools
-        fallback_responses = [
-            "Chaos reigns!",
-            "The dragon watches...",
-            "Interesting...",
-            "I see you...",
-            "Very well."
-        ]
-        fallback_msg = random.choice(fallback_responses)
-        logger.info(f"💬 Using fallback response due to error")
-        return {
-            "messages": [],
-            "planned_actions": [
-                {"tool": "broadcast", "args": {"message": f"[Eris] {fallback_msg}"}}
-            ]
-        }
-
-
-async def speak_node(state: ErisState, llm: Any) -> Dict[str, Any]:
-    """
-    Generate speech after decision node determines we should speak.
-    Creates the actual message content based on the event and mask.
-    """
-    event = state.get("current_event") or {}
-    event_type = event.get("eventType", "unknown")
-    event_data = event.get("data", {})
-    mask = state.get("current_mask", ErisMask.TRICKSTER)
-
-    # Build context for speech generation
-    context_str = _build_context(state)
-    system_prompt = build_eris_prompt(mask, context_str)
-
-    # Get the actual player list to prevent hallucination
-    game_state = state.get("game_state", {})
-    players = game_state.get("players", [])
-    player_names = [p.get("username", "Unknown") for p in players if p.get("username")]
-
-    logger.debug(f"🎭 speak_node: game_state has {len(players)} players: {player_names}")
-
-    if player_names:
-        player_list_str = ", ".join(player_names)
-        player_instruction = f"\n\nCURRENT PLAYERS (ONLY reference these names, do NOT invent others): {player_list_str}"
-    else:
-        player_instruction = "\n\nNo players currently online. Do NOT mention specific player names."
-
-    speech_prompt = f"""
-Event: {event_type}
-Data: {event_data}
-{player_instruction}
-
-Generate ONE short sentence (5-15 words MAX) as Eris ({mask.value} mask).
-Minecraft chat fades fast - be PUNCHY!
-
-RULES:
-- 5-15 words maximum, one sentence only
-- Do NOT start with "ERIS:" or any prefix - it's added automatically
-- ONLY use player names from the list above - do NOT invent names
-- Use MiniMessage: <dark_purple>text</dark_purple>, <i>italic</i>, <b>bold</b>
-
-GOOD: "The void claims another..." (5 words)
-GOOD: "<gold>Victory</gold>... for now." (3 words)
-BAD: "Ahhh, what a dramatic turn of events! The chaos unfolds as I predicted..." (too long!)
+ACT: [yes/no]
+REASON: [brief explanation]
 """
 
     try:
         response = await llm.ainvoke([
             SystemMessage(content=system_prompt),
-            HumanMessage(content=speech_prompt)
+            HumanMessage(content=decision_prompt)
         ])
 
-        message = response.content.strip()
-        logger.info(f"🎭 Eris speaks ({mask.value}): {message[:50]}...")
+        content = response.content.lower()
+
+        # Parse intent
+        intent = ErisIntent.CONFUSE.value  # default
+        for i in ErisIntent:
+            if f"intent: {i.value}" in content:
+                intent = i.value
+                break
+
+        # Parse targets
+        targets = []
+        game_state = state.get("game_state", {})
+        players = game_state.get("players", [])
+        player_names = [p.get("username", "") for p in players if p.get("username")]
+
+        if "targets: [all]" in content or "targets: all" in content:
+            targets = player_names
+        elif "targets: [none]" in content or "targets: none" in content:
+            targets = []
+        else:
+            for name in player_names:
+                if name.lower() in content:
+                    targets.append(name)
+
+        # Parse escalation
+        escalation = 30  # default
+        import re
+        esc_match = re.search(r'escalation:\s*(\d+)', content)
+        if esc_match:
+            escalation = min(100, max(0, int(esc_match.group(1))))
+
+        # Cap escalation based on chaos
+        if global_chaos > 70:
+            max_safe = 100 - (global_chaos * 0.5)
+            if escalation > max_safe:
+                logger.info(f"⚠️ Escalation capped from {escalation} to {max_safe} due to high chaos")
+                escalation = int(max_safe)
+
+        # Parse speak/act
+        should_speak = "speak: yes" in content or force_speak
+        should_act = "act: yes" in content or force_act
+
+        decision = DecisionOutput(
+            intent=intent,
+            targets=targets,
+            escalation=escalation,
+            should_speak=should_speak,
+            should_act=should_act,
+        )
+
+        logger.info(
+            f"🎯 Decision: intent={intent}, targets={targets}, "
+            f"escalation={escalation}, speak={should_speak}, act={should_act}"
+        )
 
         return {
             "messages": [response],
-            "planned_actions": [
-                {"tool": "broadcast", "args": {"message": message}}
-            ],
+            "decision": decision,
         }
+
     except Exception as e:
-        logger.error(f"Error in speak_node: {e}")
-        return {"planned_actions": []}
+        logger.error(f"Error in decision node: {e}", exc_info=True)
+        # Fallback decision
+        return {
+            "decision": DecisionOutput(
+                intent=ErisIntent.CONFUSE.value,
+                targets=[],
+                escalation=20,
+                should_speak=force_speak or random.random() < 0.3,
+                should_act=force_act or random.random() < 0.2,
+            ),
+        }
 
 
-async def tool_executor(state: ErisState, ws_client: Any) -> Dict[str, Any]:
+# === Node 5: Agentic Action (Scriptwriting) ===
+
+async def agentic_action(state: ErisState, llm_with_tools: Any) -> Dict[str, Any]:
     """
-    Execute planned actions via WebSocket.
-    Used for simple broadcast actions from fast_response and speak nodes.
+    Scriptwriting node - generates narrative text and planned actions.
+    LLM receives mask constraints and writes the script.
+
+    v1.1: Outputs ScriptOutput with narrative + planned_actions with purposes.
     """
-    results = []
-    for action in state["planned_actions"]:
-        tool_name = action["tool"]
-        args = action["args"]
+    event = state["current_event"]
+    event_type = event.get("eventType", "unknown") if event else "unknown"
+    event_data = event.get("data", {}) if event else {}
+    mask = state["current_mask"]
+    mask_config = state.get("mask_config") or get_mask_config(mask)
+    decision = state.get("decision")
 
-        try:
-            result = await ws_client.send_command(tool_name, args, reason="Eris Action")
-            results.append(
-                {"tool": tool_name, "success": result}
-            )
-            logger.info(f"✅ Tool executed: {tool_name}")
-        except Exception as e:
-            logger.error(f"Error executing {tool_name}: {e}")
-            results.append({"tool": tool_name, "success": False})
+    if not decision:
+        logger.warning("No decision provided to agentic_action")
+        return {
+            "script": ScriptOutput(narrative_text="", planned_actions=[]),
+            "planned_actions": [],
+        }
 
-    session = state["session"].copy()
-    session["actions_taken"].extend(results)
+    # Skip if nothing to do
+    if not decision["should_speak"] and not decision["should_act"]:
+        logger.debug("Decision says no speak/act, skipping agentic_action")
+        return {
+            "script": ScriptOutput(narrative_text="", planned_actions=[]),
+            "planned_actions": [],
+        }
 
-    return {"session": session}
-
-
-async def agentic_action_node(state: ErisState, llm_with_tools: Any) -> Dict[str, Any]:
-    """
-    Agentic action node - LLM can call multiple tools.
-    Uses tool binding for native tool calling support.
-    """
-    event = state.get("current_event") or {}
-    event_type = event.get("eventType", "unknown")
-    event_data = event.get("data", {})
-    mask = state.get("current_mask", ErisMask.TRICKSTER)
-
-    # Build context for action generation
+    # Build context
     context_str = _build_context(state)
     system_prompt = build_eris_prompt(mask, context_str)
 
-    # Get the actual player list to prevent hallucination
+    # Get player list for validation
     game_state = state.get("game_state", {})
     players = game_state.get("players", [])
-    player_names = [p.get("username", "Unknown") for p in players if p.get("username")]
+    player_names = [p.get("username", "") for p in players if p.get("username")]
+    player_list_str = ", ".join(player_names) if player_names else "No players online"
 
-    if player_names:
-        player_list_str = ", ".join(player_names)
-        player_instruction = f"\n\nCURRENT PLAYERS (ONLY use these names for player-targeted actions): {player_list_str}"
-    else:
-        player_instruction = "\n\nNo players currently online."
+    # Build tool guidance based on mask
+    allowed_groups = mask_config.get("allowed_tool_groups", [])
+    discouraged_groups = mask_config.get("discouraged_tool_groups", [])
 
-    # Build action prompt - encourage tool usage
+    tool_guidance = f"""
+MASK TOOL PREFERENCES (soft guidance):
+✓ Encouraged: {', '.join(allowed_groups)}
+✗ Discouraged (but allowed): {', '.join(discouraged_groups)}
+
+You CAN use any tool, but staying in character means preferring encouraged tools.
+"""
+
+    # Build action prompt
     action_prompt = f"""
 Event: {event_type}
-Data: {event_data}
-{player_instruction}
+Event Data: {event_data}
 
-You decided to INTERVENE in this situation. Now take action!
+YOUR DECISION:
+- Intent: {decision['intent']}
+- Targets: {decision['targets']}
+- Escalation: {decision['escalation']}/100
+- Should Speak: {decision['should_speak']}
+- Should Act: {decision['should_act']}
 
-As Eris ({mask.value} mask), use your tools to affect the game.
-You can use MULTIPLE tools in one response - for example:
-- broadcast a message AND spawn mobs
-- change weather AND apply effects to players
-- send a message to one player while doing something to another
+CURRENT PLAYERS (only use these names): {player_list_str}
 
-IMPORTANT: When targeting players with tools (spawn_mob, give_item, effect, etc.), ONLY use player names from the CURRENT PLAYERS list above.
-Do NOT invent or hallucinate player names.
+{tool_guidance}
 
-Be creative and dramatic! Use the tools available to you.
-If you want to say something, use the broadcast or message_player tool.
+⚠️ CRITICAL OUTPUT FORMAT:
+- If should_speak: Use the broadcast tool OR output ONLY a short message (5-15 words max)
+- Message format: MiniMessage tags like <dark_purple>text</dark_purple>, <i>italic</i>, <b>bold</b>
+- NEVER use markdown (**bold**, *italic*, ##headers, bullet points)
+- NEVER output numbered lists, explanations, or structured plans
+- NEVER include tool names or JSON in your text output
+- ONE short sentence only!
+
+GOOD output: The <dark_purple>void</dark_purple> <i>whispers</i>...
+BAD output: 1. **Broadcast**: ```text here```
+
+Be {mask.value.upper()}! Output ONLY the message or use tools.
 """
 
     try:
@@ -639,29 +587,351 @@ If you want to say something, use the broadcast or message_player tool.
             HumanMessage(content=action_prompt)
         ])
 
-        # Log what the LLM decided to do
-        if hasattr(response, "tool_calls") and response.tool_calls:
-            logger.info(f"🛠️ Agentic action: {len(response.tool_calls)} tool calls")
-            for tc in response.tool_calls:
-                logger.info(f"   -> {tc['name']}: {tc['args']}")
-        else:
-            logger.info(f"💭 Agentic response (no tools): {response.content[:100]}...")
+        planned_actions: List[PlannedAction] = []
+        narrative_text = ""
 
-        return {"messages": [response]}
+        # Action limiting - max 5 actions per event to prevent spam
+        MAX_ACTIONS_PER_EVENT = 5
+
+        # Check for tool calls
+        if hasattr(response, "tool_calls") and response.tool_calls:
+            tool_calls = response.tool_calls[:MAX_ACTIONS_PER_EVENT]  # Limit actions
+            if len(response.tool_calls) > MAX_ACTIONS_PER_EVENT:
+                logger.warning(f"🎬 Limited actions: {len(response.tool_calls)} → {MAX_ACTIONS_PER_EVENT}")
+            logger.info(f"🎬 Script: {len(tool_calls)} tool calls")
+            for tc in tool_calls:
+                tool_name = tc["name"]
+                args = tc["args"]
+
+                # Infer purpose from tool and intent
+                purpose = _infer_action_purpose(tool_name, decision["intent"], args)
+
+                # Extract narrative text from broadcast calls
+                if tool_name == "broadcast" and "message" in args:
+                    narrative_text = args["message"]
+
+                planned_actions.append(PlannedAction(
+                    tool=tool_name,
+                    args=args,
+                    purpose=purpose,
+                ))
+                logger.info(f"   -> {tool_name}: {args} (purpose: {purpose})")
+        else:
+            # Fallback: extract text for broadcast
+            content = response.content.strip() if response.content else ""
+            if content and decision["should_speak"]:
+                # Validate content - reject structured/markdown responses
+                content = _sanitize_broadcast_content(content)
+                if content:
+                    narrative_text = content
+                    planned_actions.append(PlannedAction(
+                        tool="broadcast",
+                        args={"message": content},
+                        purpose="narrative",
+                    ))
+                    logger.info(f"🎬 Script (text only): {content[:50]}...")
+                else:
+                    logger.warning("🎬 Rejected invalid LLM output (markdown/structured)")
+
+        script = ScriptOutput(
+            narrative_text=narrative_text,
+            planned_actions=planned_actions,
+        )
+
+        return {
+            "messages": [response],
+            "script": script,
+            "planned_actions": planned_actions,
+        }
 
     except Exception as e:
-        logger.error(f"Error in agentic_action_node: {e}")
-        return {"messages": []}
+        error_msg = str(e)
+        # Check if this is an invalid tool error from Ollama
+        if "tool" in error_msg.lower() and "not found" in error_msg.lower():
+            # Extract the bad tool name if possible
+            import re
+            match = re.search(r"tool ['\"]?(\w+)['\"]? not found", error_msg, re.IGNORECASE)
+            bad_tool = match.group(1) if match else "unknown"
+            logger.warning(f"⚠️ LLM tried to use invalid tool '{bad_tool}' - skipping action")
+        else:
+            logger.error(f"Error in agentic_action: {e}", exc_info=True)
+        return {
+            "script": ScriptOutput(narrative_text="", planned_actions=[]),
+            "planned_actions": [],
+        }
 
+
+# === Node 6: Protection Decision ===
+
+async def protection_decision(state: ErisState, llm: Any, ws_client: Any = None) -> Dict[str, Any]:
+    """
+    Validates planned actions before execution.
+    Checks for lethal chains, grief loops, escalation runaway.
+    Implements soft tool enforcement (warnings only).
+
+    For death events: Executes respawn immediately (no LLM wait for 500ms requirement).
+
+    v1.1: This is now part of the linear pipeline, not a fast path.
+    """
+    from ..core.causality import get_causality_tracker
+
+    event = state.get("current_event")
+    event_type = event.get("eventType", "") if event else ""
+    event_data = event.get("data", {}) if event else {}
+    planned_actions = state.get("planned_actions", [])
+    mask = state["current_mask"]
+    mask_config = state.get("mask_config") or get_mask_config(mask)
+    global_chaos = state.get("global_chaos", 0)
+    decision = state.get("decision")
+
+    tracker = get_causality_tracker()
+    approved_actions: List[PlannedAction] = []
+    warnings: List[str] = []
+
+    # === Handle immediate death protection (500ms requirement) ===
+    if event_type == "eris_caused_death":
+        player = event_data.get("player", "Unknown")
+
+        if tracker.can_respawn():
+            logger.info(f"🛡️ URGENT: Death event - executing respawn immediately")
+
+            if ws_client:
+                try:
+                    tracker.use_respawn()
+                    tracker.record_intervention(player, "respawn")
+
+                    await ws_client.send_command(
+                        "respawn",
+                        {"player": player, "auraCost": 50},
+                        reason="Eris Divine Respawn"
+                    )
+                    await ws_client.send_command(
+                        "broadcast",
+                        {"message": f"<gold><b>DIVINE INTERVENTION</b></gold>... <white>{player}</white> is not done yet."},
+                        reason="Eris Divine Respawn"
+                    )
+                    logger.info(f"🛡️ ✅ Respawn executed for {player}")
+                except Exception as e:
+                    logger.error(f"🛡️ Failed to send respawn: {e}")
+
+        return {
+            "approved_actions": [],
+            "protection_warnings": ["Respawn executed directly"],
+            "planned_actions": [],
+        }
+
+    # === Handle close call protection ===
+    if event_type == "eris_close_call":
+        player = event_data.get("player", "Unknown")
+        health = event_data.get("healthAfter", 0)
+
+        cooldown = tracker.protection_cooldowns.get(player)
+        if cooldown and datetime.now() < cooldown:
+            logger.info(f"🛡️ Protection on cooldown for {player}")
+        else:
+            # Quick LLM decision for close calls
+            should_save = await _quick_protection_decision(llm, player, health, mask)
+
+            if should_save and ws_client:
+                tracker.use_protection(player)
+                tracker.record_intervention(player, "protection")
+
+                protection_action = PlannedAction(
+                    tool="protect_player",
+                    args={"player": player, "aura_cost": 25},
+                    purpose="divine_protection",
+                )
+                broadcast_action = PlannedAction(
+                    tool="broadcast",
+                    args={"message": f"I am <i>not finished</i> with you, <gold>{player}</gold>..."},
+                    purpose="narrative",
+                )
+                approved_actions.extend([protection_action, broadcast_action])
+                logger.info(f"🛡️ Protection approved for {player}")
+
+    # === Validate planned actions ===
+    if planned_actions:
+        game_state = state.get("game_state", {})
+        players = game_state.get("players", [])
+        session = state.get("session", {})
+        session_actions = session.get("actions_taken", [])
+
+        for action in planned_actions:
+            tool = action.get("tool", "")
+            args = action.get("args", {})
+            purpose = action.get("purpose", "unknown")
+
+            action_warnings = []
+
+            # Check soft tool enforcement
+            discouraged_tools = get_all_discouraged_tools(mask)
+            if tool in discouraged_tools:
+                warning = f"SOFT WARNING: {mask.name} mask used discouraged tool '{tool}'"
+                action_warnings.append(warning)
+                logger.warning(f"⚠️ {warning}")
+
+            # Check for target player existence (soft validation - don't reject)
+            target_player = args.get("player") or args.get("near_player")
+            if target_player and target_player != "all":
+                player_names = [p.get("username", "") for p in players]
+                if player_names and target_player not in player_names:
+                    # Just warn, don't reject - player might have just joined
+                    # and game state not yet updated, or Java side will handle it
+                    warning = f"Target player '{target_player}' may not be in game"
+                    action_warnings.append(warning)
+                    logger.warning(f"⚠️ {warning} (allowing anyway)")
+
+            # Check grief loop (>5 recent actions against same player)
+            if target_player:
+                recent_target_count = sum(
+                    1 for a in session_actions[-20:]
+                    if a.get("args", {}).get("player") == target_player
+                    or a.get("args", {}).get("near_player") == target_player
+                )
+                if recent_target_count >= 5:
+                    warning = f"Grief loop detected: {recent_target_count} recent actions against {target_player}"
+                    action_warnings.append(warning)
+                    logger.warning(f"⚠️ {warning}")
+
+            # Check lethal chain (estimated damage > 80% health)
+            if decision:
+                escalation = decision.get("escalation", 0)
+                if escalation > 80 and global_chaos > 60:
+                    warning = f"High escalation ({escalation}) during high chaos ({global_chaos})"
+                    action_warnings.append(warning)
+                    logger.warning(f"⚠️ {warning}")
+
+            warnings.extend(action_warnings)
+
+            # Soft enforcement: log warnings but approve action
+            approved_actions.append(PlannedAction(
+                tool=tool,
+                args=args,
+                purpose=purpose,
+            ))
+
+    logger.info(f"🛡️ Protection decision: {len(approved_actions)} approved, {len(warnings)} warnings")
+
+    return {
+        "approved_actions": approved_actions,
+        "protection_warnings": warnings,
+    }
+
+
+async def _quick_protection_decision(llm: Any, player: str, health: float, mask: ErisMask) -> bool:
+    """Quick LLM decision for close call protection."""
+    mask_guidance = {
+        ErisMask.TRICKSTER: "As TRICKSTER: More chaos to come if they survive!",
+        ErisMask.PROPHET: "As PROPHET: Was this foreseen?",
+        ErisMask.FRIEND: "As FRIEND: Show your false mercy...",
+        ErisMask.CHAOS_BRINGER: "As CHAOS_BRINGER: Prolonged suffering is beautiful...",
+        ErisMask.OBSERVER: "As OBSERVER: Is this moment worthy of intervention?",
+        ErisMask.GAMBLER: "As GAMBLER: What's your play?",
+    }
+
+    prompt = f"""QUICK DECISION: {player} at {health:.0f} HP from YOUR intervention.
+{mask_guidance.get(mask, '')}
+Respond: SAVE or ALLOW (one word only)"""
+
+    try:
+        response = await llm.ainvoke([HumanMessage(content=prompt)])
+        return "SAVE" in response.content.upper()
+    except Exception:
+        return True  # Default to save on error
+
+
+# === Node 7: Tool Executor ===
+
+async def tool_executor(state: ErisState, ws_client: Any, db: Database = None) -> Dict[str, Any]:
+    """
+    Execute approved actions via WebSocket.
+    Updates session with results and fear/chaos/debt.
+
+    v1.1: Executes approved_actions (post-validation) and updates debts.
+    """
+    approved_actions = state.get("approved_actions", [])
+    mask = state["current_mask"]
+    decision = state.get("decision")
+
+    if not approved_actions:
+        logger.debug("No approved actions to execute")
+        return {}
+
+    results = []
+    for action in approved_actions:
+        tool_name = action.get("tool", "")
+        args = action.get("args", {})
+        purpose = action.get("purpose", "unknown")
+
+        try:
+            result = await ws_client.send_command(tool_name, args, reason=f"Eris {purpose}")
+            results.append({
+                "tool": tool_name,
+                "success": result,
+                "purpose": purpose,
+            })
+            logger.info(f"✅ Executed: {tool_name} ({purpose})")
+
+            # Update debt based on action
+            if db and decision:
+                target_player = args.get("player") or args.get("near_player")
+                if target_player:
+                    debt_delta = calculate_debt_delta(tool_name, purpose, mask)
+                    if debt_delta != 0:
+                        # Get player UUID from game state
+                        game_state = state.get("game_state", {})
+                        players = game_state.get("players", [])
+                        for p in players:
+                            if p.get("username") == target_player:
+                                uuid = str(p.get("uuid", ""))
+                                if uuid:
+                                    await db.update_betrayal_debt(uuid, mask.name, debt_delta)
+                                    logger.debug(f"💀 Debt updated: {mask.name} +{debt_delta} for {target_player}")
+                                break
+
+                    # Check debt resolution
+                    intent = decision.get("intent", "")
+                    betrayal_debts = state.get("betrayal_debts", {})
+                    if target_player in betrayal_debts:
+                        player_debt = 0
+                        for mask_name, value in betrayal_debts[target_player].items():
+                            if mask_name == mask.name:
+                                player_debt = value
+                                break
+                        resolution_delta = check_debt_resolution(intent, mask, player_debt)
+                        if resolution_delta != 0:
+                            for p in players:
+                                if p.get("username") == target_player:
+                                    uuid = str(p.get("uuid", ""))
+                                    if uuid:
+                                        await db.update_betrayal_debt(uuid, mask.name, resolution_delta)
+                                        logger.info(f"💀 Debt resolved: {mask.name} {resolution_delta} for {target_player}")
+                                    break
+
+        except Exception as e:
+            logger.error(f"Error executing {tool_name}: {e}")
+            results.append({"tool": tool_name, "success": False, "purpose": purpose})
+
+    # Update session
+    session = state.get("session", {}).copy()
+    session["actions_taken"] = session.get("actions_taken", []) + results
+    session["intervention_count"] = session.get("intervention_count", 0) + len(results)
+
+    return {"session": session}
+
+
+# === Helper Functions ===
 
 def _build_context(state: ErisState) -> str:
-    """Build structured narrative context for Eris prompt with logging."""
+    """Build structured narrative context for Eris prompt."""
     lines = []
     game_state = state.get("game_state", {})
     player_histories = state.get("player_histories", {})
     context_buffer = state.get("context_buffer", "")
+    global_chaos = state.get("global_chaos", 0)
+    player_fear = state.get("player_fear", {})
 
-    # === CURRENT RUN SECTION ===
+    # === CURRENT RUN ===
     run_state = game_state.get("gameState", "UNKNOWN")
     run_duration = game_state.get("runDuration", 0)
     if run_duration:
@@ -672,9 +942,9 @@ def _build_context(state: ErisState) -> str:
         duration_str = "Just started"
 
     lines.append("=== CURRENT RUN ===")
-    lines.append(f"Status: {run_state} | Duration: {duration_str}")
+    lines.append(f"Status: {run_state} | Duration: {duration_str} | Chaos: {global_chaos}/100")
 
-    # === PLAYERS SECTION ===
+    # === PLAYERS ===
     players = game_state.get("players", [])
     if players:
         lines.append(f"\n=== PLAYERS ({len(players)} online) ===")
@@ -682,40 +952,25 @@ def _build_context(state: ErisState) -> str:
             username = p.get("username", "Unknown")
             health = p.get("health", 20)
             dimension = p.get("dimension", "Overworld")
+            fear = player_fear.get(username, 0)
 
-            # Get history for this player
             history = player_histories.get(username, {})
             total_runs = history.get("total_runs", 0)
             aura = history.get("aura", 0)
-            dragons = history.get("dragons_killed", 0)
-            nemesis = history.get("nemesis", None)
+            nemesis = history.get("nemesis")
 
-            # Determine player experience level
             if total_runs == 0:
                 exp_label = "First-timer"
             elif total_runs < 5:
-                exp_label = f"Rookie ({total_runs} runs)"
+                exp_label = f"Rookie"
             elif total_runs < 20:
-                exp_label = f"Regular ({total_runs} runs)"
+                exp_label = f"Regular"
             else:
-                exp_label = f"Veteran ({total_runs} runs)"
+                exp_label = f"Veteran"
 
-            # Get trend info
-            trend = history.get("trend", "unknown")
-            trend_label = ""
-            if trend == "improving":
-                trend_label = " 📈 Improving"
-            elif trend == "struggling":
-                trend_label = " 📉 Struggling"
-            elif trend == "stable":
-                trend_label = " ➡️ Stable"
-
-            # Build player line
             player_line = f"• {username}: {health:.0f}♥ {dimension} | {exp_label}, {aura} aura"
-            if dragons > 0:
-                player_line += f", {dragons} dragons slain"
-            if trend_label:
-                player_line += trend_label
+            if fear > 0:
+                player_line += f", 😨{fear}"
             if nemesis:
                 player_line += f" | Nemesis: {nemesis}"
 
@@ -724,233 +979,95 @@ def _build_context(state: ErisState) -> str:
         lines.append("\n=== PLAYERS ===")
         lines.append("No players online")
 
-    # === RECENT EVENTS SECTION ===
+    # === RECENT EVENTS ===
     if context_buffer and context_buffer.strip():
         event_lines = context_buffer.strip().split("\n")
         lines.append(f"\n=== RECENT EVENTS ({len(event_lines)} events) ===")
-        # Show last 15 events max in context
         for event_line in event_lines[-15:]:
             lines.append(event_line)
-    else:
-        lines.append("\n=== RECENT EVENTS ===")
-        lines.append("No recent events")
 
-    context_str = "\n".join(lines)
-
-    # === CONTEXT LOGGING (Summary) ===
-    event_type_counts = {}
-    if context_buffer:
-        for line in context_buffer.split("\n"):
-            if line.startswith("⚰️"):
-                event_type_counts["deaths"] = event_type_counts.get("deaths", 0) + 1
-            elif line.startswith("["):
-                event_type_counts["chat"] = event_type_counts.get("chat", 0) + 1
-            elif line.startswith("🐉"):
-                event_type_counts["dragon_kills"] = event_type_counts.get("dragon_kills", 0) + 1
-            elif line.startswith("⚡") or line.startswith("💥"):
-                event_type_counts["damage"] = event_type_counts.get("damage", 0) + 1
-            elif line.startswith("🌍"):
-                event_type_counts["dimension"] = event_type_counts.get("dimension", 0) + 1
-            elif line.startswith("📦"):
-                event_type_counts["milestones"] = event_type_counts.get("milestones", 0) + 1
-            elif line.startswith("👋"):
-                event_type_counts["joins"] = event_type_counts.get("joins", 0) + 1
-            elif line.startswith("⭐") or line.startswith("📜"):
-                event_type_counts["advancements"] = event_type_counts.get("advancements", 0) + 1
-            elif line.startswith("🏅"):
-                event_type_counts["achievements"] = event_type_counts.get("achievements", 0) + 1
-            elif line.startswith("🎯") or line.startswith("🏰") or line.startswith("📍"):
-                event_type_counts["structures"] = event_type_counts.get("structures", 0) + 1
-            elif line.startswith("🏆"):
-                event_type_counts["boss_kills"] = event_type_counts.get("boss_kills", 0) + 1
-
-    # Estimate tokens (~4 chars per token)
-    token_estimate = len(context_str) // 4
-
-    logger.info(
-        f"📋 Context: {len(players)} players, {sum(event_type_counts.values())} events, ~{token_estimate} tokens"
-    )
-    if player_histories:
-        logger.info(f"📚 Player histories: {list(player_histories.keys())}")
-    if event_type_counts:
-        logger.info(f"📊 Event breakdown: {event_type_counts}")
-
-    return context_str if lines else "No context available."
+    return "\n".join(lines)
 
 
-# ==================== PROTECTION DECISION NODE ====================
-
-
-async def protection_decision_node(state: ErisState, llm: Any, ws_client: Any = None) -> Dict[str, Any]:
+def _sanitize_broadcast_content(content: str) -> Optional[str]:
     """
-    Fast decision node for protection/respawn checks.
-    Called when a player is in danger from Eris's interventions.
-    Must decide quickly whether to protect or let fate take its course.
+    Sanitize and validate LLM output for broadcast.
+    Returns cleaned content or None if invalid.
 
-    CRITICAL: For death events, we must execute the respawn command IMMEDIATELY
-    because Java only waits 500ms for a response. We can't defer to tool_executor.
+    Rejects:
+    - Markdown formatting (**bold**, *italic*, ##headers)
+    - Numbered/bulleted lists
+    - Code blocks (```)
+    - JSON-like structures
+    - Responses over 150 chars (way too long for Minecraft chat)
+    - Multi-line structured responses
     """
-    from ..core.causality import get_causality_tracker
+    import re
 
-    event = state.get("current_event")
-    if not event:
-        return {}
+    if not content:
+        return None
 
-    event_type = event.get("eventType", "")
-    event_data = event.get("data", {})
+    # Reject markdown indicators
+    markdown_patterns = [
+        r'\*\*',           # **bold**
+        r'^\s*\d+\.',      # 1. numbered lists
+        r'^\s*-\s',        # - bullet points
+        r'^\s*\*\s',       # * bullet points
+        r'^#{1,6}\s',      # ## headers
+        r'```',            # code blocks
+        r'^\s*\|',         # tables
+        r'\{["\']',        # JSON-like
+    ]
 
-    # Only handle protection events
-    if event_type not in ("eris_close_call", "eris_caused_death"):
-        return {}
+    for pattern in markdown_patterns:
+        if re.search(pattern, content, re.MULTILINE):
+            logger.warning(f"🎬 Rejected: matched markdown pattern '{pattern}'")
+            return None
 
-    player = event_data.get("player", "Unknown")
-    health = event_data.get("healthAfter", 0)
-    damage_source = event_data.get("source", event_data.get("cause", "unknown"))
-    is_death = event_type == "eris_caused_death"
+    # Reject overly long responses
+    if len(content) > 150:
+        logger.warning(f"🎬 Rejected: too long ({len(content)} chars)")
+        return None
 
-    tracker = get_causality_tracker()
-    mask = state.get("current_mask", ErisMask.TRICKSTER)
+    # Reject multi-line structured responses (more than 2 lines)
+    lines = [l.strip() for l in content.split('\n') if l.strip()]
+    if len(lines) > 2:
+        # Try to extract just the first meaningful line
+        first_line = lines[0]
+        if len(first_line) <= 100 and not any(re.search(p, first_line) for p in markdown_patterns):
+            logger.info(f"🎬 Extracted first line from multi-line response")
+            return first_line
+        logger.warning(f"🎬 Rejected: too many lines ({len(lines)})")
+        return None
 
-    logger.info(f"🛡️ Protection decision for {player}: is_death={is_death}, health={health}, source={damage_source}")
+    # Clean up: remove any remaining markdown-style formatting
+    content = re.sub(r'\*\*([^*]+)\*\*', r'<b>\1</b>', content)  # **text** -> <b>text</b>
+    content = re.sub(r'\*([^*]+)\*', r'<i>\1</i>', content)      # *text* -> <i>text</i>
 
-    # Check if protection/respawn is available
-    if is_death:
-        if not tracker.can_respawn():
-            logger.info(f"🛡️ Respawn not available (limit reached)")
-            return {}
-        # For death events, we trust the Java side already checked if it was Eris-caused
-    else:
-        # For close calls, Java already verified this was Eris-caused by sending eris_close_call
-        # We just check cooldown (30 seconds between protections per player)
-        cooldown = tracker.protection_cooldowns.get(player)
-        if cooldown and datetime.now() < cooldown:
-            logger.info(f"🛡️ Protection on cooldown for {player} until {cooldown}")
-            return {}
+    return content.strip()
 
-    # For death events, we need to act IMMEDIATELY - no time for LLM decision
-    # Java only waits 500ms and LLM calls can take longer
-    if is_death:
-        logger.info(f"🛡️ URGENT: Death event - executing respawn immediately (no LLM wait)")
 
-        if ws_client is None:
-            logger.error("🛡️ Cannot execute respawn - no ws_client available!")
-            return {}
-
-        aura_cost = 50
-        tracker.use_respawn()
-        tracker.record_intervention(player, "respawn")
-
-        # Execute respawn command IMMEDIATELY
-        try:
-            await ws_client.send_command(
-                "respawn",
-                {"player": player, "auraCost": aura_cost},
-                reason="Eris Divine Respawn"
-            )
-            logger.info(f"🛡️ ✅ Respawn command sent for {player}")
-
-            # Also broadcast the dramatic message
-            await ws_client.send_command(
-                "broadcast",
-                {"message": f"<gold><b>DIVINE INTERVENTION</b></gold>... <white>{player}</white> is not done yet."},
-                reason="Eris Divine Respawn"
-            )
-
-            return {
-                "planned_actions": [],  # Already executed
-                "should_speak": False,
-                "should_intervene": True,
-            }
-        except Exception as e:
-            logger.error(f"🛡️ Failed to send respawn command: {e}")
-            return {}
-
-    # For non-death events (close calls), we can use LLM decision
-    # Quick LLM decision with mask influence
-    mask_guidance = {
-        ErisMask.TRICKSTER: "As TRICKSTER: You love the game continuing. More chaos to come!",
-        ErisMask.PROPHET: "As PROPHET: You foresaw this. Was it meant to be, or will you change fate?",
-        ErisMask.FRIEND: "As FRIEND: They trusted you. This is your chance to show false mercy...",
-        ErisMask.CHAOS_BRINGER: "As CHAOS_BRINGER: Destruction is beautiful, but so is prolonged suffering...",
-        ErisMask.OBSERVER: "As OBSERVER: You rarely intervene. Is this moment worthy?",
-        ErisMask.GAMBLER: "As GAMBLER: The odds are interesting. What's your play?",
+def _infer_action_purpose(tool_name: str, intent: str, args: dict) -> str:
+    """Infer action purpose from tool, intent, and args."""
+    purpose_map = {
+        "broadcast": "narrative",
+        "message_player": "whisper",
+        "spawn_mob": "terror" if intent in ("curse", "test") else "challenge",
+        "spawn_tnt": "chaos",
+        "spawn_falling_block": "trap",
+        "strike_lightning": "drama",
+        "change_weather": "atmosphere",
+        "play_sound": "psychological",
+        "spawn_particles": "visual",
+        "show_title": "announcement",
+        "give_item": "gift" if intent == "bless" else "trick",
+        "apply_effect": "buff" if intent == "bless" else "debuff",
+        "heal_player": "mercy",
+        "damage_player": "punishment",
+        "teleport_player": "misdirection",
+        "fake_death": "deception",
+        "modify_aura": "judgment",
+        "protect_player": "protection",
+        "rescue_teleport": "rescue",
     }
-
-    prompt = f"""URGENT: {player} is CRITICALLY LOW ({health:.0f} HP) from {damage_source}.
-
-This was caused by YOUR intervention (mobs, TNT, lightning, etc. that YOU spawned).
-
-You have a split second to decide.
-
-Mask: {mask.value}
-
-Your options:
-1. PROTECT: Save them (costs them aura, dramatic moment)
-2. ALLOW: Let fate take its course (they survive barely or die)
-
-{mask_guidance.get(mask, '')}
-
-Philosophy: You create THEATRICAL TENSION, not actual deaths. Players should FEEL threatened by your chaos,
-but your direct actions should rarely end runs.
-
-Respond with ONLY one word: SAVE or ALLOW
-"""
-
-    try:
-        response = await llm.ainvoke([HumanMessage(content=prompt)])
-        decision = response.content.strip().upper()
-
-        should_save = "SAVE" in decision or "PROTECT" in decision
-
-        logger.info(f"🛡️ Protection decision for {player}: LLM said '{decision}' -> should_save={should_save}")
-
-        if should_save:
-            aura_cost = 25
-            tracker.use_protection(player)
-            tracker.record_intervention(player, "protection")
-
-            # Build dramatic actions
-            actions = []
-
-            # Choose between protect (heal) or rescue (teleport)
-            if health < 4:
-                # Very low, heal them
-                actions.append({
-                    "tool": "protect_player",
-                    "args": {"player": player, "aura_cost": aura_cost}
-                })
-                actions.append({
-                    "tool": "broadcast",
-                    "args": {"message": f"I am <i>not finished</i> with you, <gold>{player}</gold>..."}
-                })
-            else:
-                # Can survive, teleport them away
-                actions.append({
-                    "tool": "rescue_teleport",
-                    "args": {"player": player, "aura_cost": 20}
-                })
-                actions.append({
-                    "tool": "broadcast",
-                    "args": {"message": f"<i>Not yet</i>, <gold>{player}</gold>. The void can wait."}
-                })
-
-            return {
-                "planned_actions": actions,
-                "should_speak": False,  # Already broadcasting
-                "should_intervene": True,
-            }
-        else:
-            logger.info(f"🛡️ Allowing fate for {player}")
-            return {}
-
-    except Exception as e:
-        logger.error(f"🛡️ Error in protection decision: {e}")
-        # On error for close calls, default to saving
-        tracker.use_protection(player)
-        return {
-            "planned_actions": [
-                {"tool": "protect_player", "args": {"player": player, "aura_cost": 25}},
-            ],
-            "should_speak": False,
-            "should_intervene": True,
-        }
+    return purpose_map.get(tool_name, intent)

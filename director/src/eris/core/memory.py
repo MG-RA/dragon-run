@@ -1,9 +1,9 @@
-"""Short-term and long-term memory management."""
+"""Short-term and long-term memory management - v1.1."""
 
 import logging
 from collections import deque
 from datetime import datetime
-from typing import Optional
+from typing import Optional, Dict
 
 logger = logging.getLogger(__name__)
 
@@ -175,6 +175,44 @@ class ShortTermMemory:
                 lines.append(f"✨ DIVINE INTERVENTION: Eris respawned {player} (-{aura_cost} aura)")
 
         return "\n".join(lines[-30:])  # Last 30 events max
+
+    def get_context_with_tension(
+        self,
+        player_fear: Optional[Dict[str, int]] = None,
+        global_chaos: int = 0,
+    ) -> str:
+        """
+        Format memory as narrative context with tension state - v1.1.
+
+        Includes fear/chaos summary for LLM context.
+        """
+        context = self.get_context_string()
+
+        # Add tension summary
+        tension_lines = []
+        if global_chaos > 0:
+            chaos_label = "LOW"
+            if global_chaos >= 70:
+                chaos_label = "CRITICAL"
+            elif global_chaos >= 50:
+                chaos_label = "HIGH"
+            elif global_chaos >= 30:
+                chaos_label = "MODERATE"
+            tension_lines.append(f"🌀 Global Chaos: {global_chaos}/100 ({chaos_label})")
+
+        if player_fear:
+            high_fear_players = [
+                f"{p}: {f}"
+                for p, f in player_fear.items()
+                if f >= 30
+            ]
+            if high_fear_players:
+                tension_lines.append(f"😨 Elevated Fear: {', '.join(high_fear_players)}")
+
+        if tension_lines:
+            return context + "\n\n=== TENSION STATE ===\n" + "\n".join(tension_lines)
+
+        return context
 
     def _estimate_tokens(self, text: str) -> int:
         """Rough estimate of tokens from text."""

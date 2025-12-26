@@ -145,6 +145,17 @@ public class DeathListener implements Listener {
     private void processNormalDeath(PlayerDeathEvent event, Player player, UUID uuid, String playerName, String deathCause) {
         String roast = getRoast(deathCause);
 
+        // Send player_death event to Director AI FIRST (before run ends)
+        if (plugin.getDirectorServer() != null) {
+            com.google.gson.JsonObject data = new com.google.gson.JsonObject();
+            data.addProperty("player", playerName);
+            data.addProperty("playerUuid", uuid.toString());
+            data.addProperty("cause", deathCause);
+            data.addProperty("roast", roast);
+            data.addProperty("isErisCaused", false);
+            plugin.getDirectorServer().broadcastEvent("player_death", data);
+        }
+
         // Remove aura based on death type
         int auraLoss = getAuraLoss(deathCause);
         plugin.getAuraManager().removeAura(uuid, auraLoss, "died (" + deathCause.toLowerCase() + ")");
@@ -174,6 +185,17 @@ public class DeathListener implements Listener {
      */
     private void processNormalDeathDelayed(Player player, UUID uuid, String playerName, String deathCause) {
         String roast = getRoast(deathCause);
+
+        // Send player_death event to Director AI FIRST (before run ends)
+        if (plugin.getDirectorServer() != null) {
+            com.google.gson.JsonObject data = new com.google.gson.JsonObject();
+            data.addProperty("player", playerName);
+            data.addProperty("playerUuid", uuid.toString());
+            data.addProperty("cause", deathCause);
+            data.addProperty("roast", roast);
+            data.addProperty("isErisCaused", true);  // Was Eris-caused but Python didn't intervene
+            plugin.getDirectorServer().broadcastEvent("player_death", data);
+        }
 
         // Remove aura based on death type
         int auraLoss = getAuraLoss(deathCause);

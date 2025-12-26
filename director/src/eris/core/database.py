@@ -218,3 +218,207 @@ class Database:
         except Exception as e:
             logger.error(f"Error fetching recent achievements: {e}")
             return []
+
+    # === Betrayal Debt Methods (v1.1) ===
+
+    async def get_betrayal_debts(self, uuid: str) -> Dict[str, int]:
+        """Get all betrayal debts for a player, keyed by mask type."""
+        if not self.pool:
+            return {}
+
+        query = """
+        SELECT mask_type, debt_value
+        FROM eris_betrayal_debt
+        WHERE player_uuid = $1
+        """
+        try:
+            async with self.pool.acquire() as conn:
+                rows = await conn.fetch(query, uuid)
+                return {row["mask_type"]: row["debt_value"] for row in rows}
+        except Exception as e:
+            logger.error(f"Error fetching betrayal debts: {e}")
+            return {}
+
+    async def update_betrayal_debt(self, uuid: str, mask_type: str, delta: int) -> int:
+        """
+        Update betrayal debt for a player/mask combination.
+
+        Returns the new debt value.
+        """
+        if not self.pool:
+            return 0
+
+        # Upsert query - insert if not exists, update if exists
+        query = """
+        INSERT INTO eris_betrayal_debt (player_uuid, mask_type, debt_value, last_updated)
+        VALUES ($1, $2, GREATEST(0, LEAST(100, $3)), NOW())
+        ON CONFLICT (player_uuid, mask_type)
+        DO UPDATE SET
+            debt_value = GREATEST(0, LEAST(100, eris_betrayal_debt.debt_value + $3)),
+            last_updated = NOW()
+        RETURNING debt_value
+        """
+        try:
+            async with self.pool.acquire() as conn:
+                row = await conn.fetchrow(query, uuid, mask_type, delta)
+                return row["debt_value"] if row else 0
+        except Exception as e:
+            logger.error(f"Error updating betrayal debt: {e}")
+            return 0
+
+    async def get_all_player_debts(self, uuids: list) -> Dict[str, Dict[str, int]]:
+        """Get betrayal debts for multiple players at once."""
+        if not self.pool or not uuids:
+            return {}
+
+        query = """
+        SELECT player_uuid, mask_type, debt_value
+        FROM eris_betrayal_debt
+        WHERE player_uuid = ANY($1)
+        """
+        try:
+            async with self.pool.acquire() as conn:
+                rows = await conn.fetch(query, uuids)
+                result: Dict[str, Dict[str, int]] = {}
+                for row in rows:
+                    player_uuid = row["player_uuid"]
+                    if player_uuid not in result:
+                        result[player_uuid] = {}
+                    result[player_uuid][row["mask_type"]] = row["debt_value"]
+                return result
+        except Exception as e:
+            logger.error(f"Error fetching all player debts: {e}")
+            return {}
+
+    # === Prophecy Methods (v1.1) ===
+
+    async def get_active_prophecies(self, uuid: str) -> list:
+        """Get unfulfilled prophecies for a player."""
+        if not self.pool:
+            return []
+
+        query = """
+        SELECT id, prophecy_text, prophecy_type, created_at
+        FROM eris_prophecies
+        WHERE player_uuid = $1 AND is_fulfilled = FALSE
+        ORDER BY created_at DESC
+        """
+        try:
+            async with self.pool.acquire() as conn:
+                rows = await conn.fetch(query, uuid)
+                return [
+                    {
+                        "id": row["id"],
+                        "text": row["prophecy_text"],
+                        "type": row["prophecy_type"],
+                        "created_at": row["created_at"],
+                    }
+                    for row in rows
+                ]
+        except Exception as e:
+            logger.error(f"Error fetching active prophecies: {e}")
+            return []
+
+    async def create_prophecy(
+        self, uuid: str, text: str, prophecy_type: str, run_id: Optional[int] = None
+    ) -> Optional[int]:
+        """Create a new prophecy for a player. Returns the prophecy ID."""
+        if not self.pool:
+            return None
+
+        query = """
+        INSERT INTO eris_prophecies (player_uuid, prophecy_text, prophecy_type, run_id)
+        VALUES ($1, $2, $3, $4)
+        RETURNING id
+        """
+        try:
+            async with self.pool.acquire() as conn:
+                row = await conn.fetchrow(query, uuid, text, prophecy_type, run_id)
+                return row["id"] if row else None
+        except Exception as e:
+            logger.error(f"Error creating prophecy: {e}")
+            return None
+
+    async def fulfill_prophecy(self, prophecy_id: int) -> bool:
+        """Mark a prophecy as fulfilled."""
+        if not self.pool:
+            return False
+
+        query = """
+        UPDATE eris_prophecies
+        SET is_fulfilled = TRUE, fulfilled_at = NOW()
+        WHERE id = $1
+        """
+        try:
+            async with self.pool.acquire() as conn:
+                await conn.execute(query, prophecy_id)
+                logger.info(f"Prophecy {prophecy_id} fulfilled")
+                return True
+        except Exception as e:
+            logger.error(f"Error fulfilling prophecy: {e}")
+            return False
+
+    async def get_all_active_prophecies(self, uuids: list) -> Dict[str, list]:
+        """Get active prophecies for multiple players at once."""
+        if not self.pool or not uuids:
+            return {}
+
+        query = """
+        SELECT player_uuid, id, prophecy_text, prophecy_type, created_at
+        FROM eris_prophecies
+        WHERE player_uuid = ANY($1) AND is_fulfilled = FALSE
+        ORDER BY created_at DESC
+        """
+        try:
+            async with self.pool.acquire() as conn:
+                rows = await conn.fetch(query, uuids)
+                result: Dict[str, list] = {}
+                for row in rows:
+                    player_uuid = row["player_uuid"]
+                    if player_uuid not in result:
+                        result[player_uuid] = []
+                    result[player_uuid].append({
+                        "id": row["id"],
+                        "text": row["prophecy_text"],
+                        "type": row["prophecy_type"],
+                        "created_at": row["created_at"],
+                    })
+                return result
+        except Exception as e:
+            logger.error(f"Error fetching all active prophecies: {e}")
+            return {}
+
+    # === Run State Methods (v1.1) ===
+
+    async def save_run_eris_state(
+        self,
+        run_id: int,
+        peak_chaos: int,
+        total_interventions: int,
+        protections_used: int,
+        respawns_used: int,
+        final_chaos: int,
+    ) -> bool:
+        """Save Eris-specific state for a run (for analytics)."""
+        if not self.pool:
+            return False
+
+        query = """
+        INSERT INTO eris_run_state (run_id, peak_chaos, total_interventions, protections_used, respawns_used, final_chaos)
+        VALUES ($1, $2, $3, $4, $5, $6)
+        ON CONFLICT (run_id) DO UPDATE SET
+            peak_chaos = $2,
+            total_interventions = $3,
+            protections_used = $4,
+            respawns_used = $5,
+            final_chaos = $6
+        """
+        try:
+            async with self.pool.acquire() as conn:
+                await conn.execute(
+                    query, run_id, peak_chaos, total_interventions, protections_used, respawns_used, final_chaos
+                )
+                return True
+        except Exception as e:
+            logger.error(f"Error saving run Eris state: {e}")
+            return False

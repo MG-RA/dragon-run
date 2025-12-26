@@ -28,19 +28,30 @@ class EventProcessor:
     Prevents GPU saturation while ensuring responsive chat.
     """
 
-    def __init__(self, config: dict):
+    # Default debounce settings (seconds)
+    DEFAULT_DEBOUNCE = {
+        "state": 15.0,
+        "player_damaged": 5.0,
+        "resource_milestone": 3.0,
+        "mob_kills_batch": 0,  # Already batched on Java side
+        "advancement_made": 2.0,
+    }
+
+    def __init__(self, config: Optional[Dict[str, float]] = None):
+        """Initialize event processor.
+
+        Args:
+            config: Optional debounce settings dict. Keys are event types,
+                   values are debounce times in seconds. Merges with defaults.
+        """
         self.event_queue: list[PrioritizedEvent] = []
-        self.chat_buffer: deque = deque(maxlen=50)  # Last 50 messages
+        self.chat_buffer: deque = deque(maxlen=50)
         self.last_process_time: dict[str, float] = {}
 
-        # Debounce settings (seconds)
-        self.debounce = {
-            "state": 15.0,  # Process state every 15s max
-            "player_damaged": 5.0,  # Aggregate damage events
-            "resource_milestone": 3.0,
-            "mob_kills_batch": 0,  # Already batched on Java side
-            "advancement_made": 2.0,  # Allow rapid advancements but slight debounce
-        }
+        # Merge config with defaults
+        self.debounce = self.DEFAULT_DEBOUNCE.copy()
+        if config:
+            self.debounce.update(config)
 
         # Processing lock
         self._processing = False

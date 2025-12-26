@@ -30,6 +30,55 @@ class EventPriority(Enum):
     ROUTINE = 5    # Proactive checks
 
 
+class ErisIntent(Enum):
+    """Eris's intent for an action."""
+
+    BLESS = "bless"        # Help the player
+    CURSE = "curse"        # Harm the player
+    TEST = "test"          # Challenge the player
+    CONFUSE = "confuse"    # Misdirect or deceive
+    REVEAL = "reveal"      # Share truth or prophecy
+    LIE = "lie"            # Deceive with false information
+
+
+# === New TypedDicts for v1.1 ===
+
+class PlannedAction(TypedDict):
+    """A single planned action with purpose annotation."""
+
+    tool: str                     # Tool name (e.g., "spawn_mob", "broadcast")
+    args: Dict[str, Any]          # Tool arguments
+    purpose: str                  # Why this action (e.g., "terror", "misdirection")
+
+
+class MaskConfig(TypedDict):
+    """Rich mask configuration from mask_selector."""
+
+    mask: str                          # "TRICKSTER", "PROPHET", etc.
+    bias: Dict[str, float]             # {"challenge": 0.4, "mercy": 0.2, "dramatic": 0.4}
+    allowed_behaviors: List[str]       # ["pranks", "misdirection", "baited gifts"]
+    allowed_tool_groups: List[str]     # ["teleport", "fake_death", "particles", "sounds"]
+    discouraged_tool_groups: List[str] # ["damage", "mobs_heavy", "tnt"]
+    deception_level: int               # 0-100
+
+
+class DecisionOutput(TypedDict):
+    """Structured output from decision_node."""
+
+    intent: str                   # One of ErisIntent values
+    targets: List[str]            # Player names to target
+    escalation: int               # 0-100 escalation level
+    should_speak: bool            # Whether to broadcast a message
+    should_act: bool              # Whether to take game actions
+
+
+class ScriptOutput(TypedDict):
+    """Output from agentic_action (scriptwriting node)."""
+
+    narrative_text: str                    # Message to broadcast (if should_speak)
+    planned_actions: List[PlannedAction]   # Actions with purposes
+
+
 class ErisState(TypedDict):
     """Main graph state for the Eris Director agent."""
 
@@ -52,18 +101,29 @@ class ErisState(TypedDict):
     # Current run session tracking
     session: Dict[str, Any]
 
-    # Eris persona state
+    # === Persona State (v1.1 Enhanced) ===
     current_mask: ErisMask
-    mask_stability: float  # How likely to keep current mask (0-1)
-    mood: str  # Affects response tone
+    mask_config: Optional[MaskConfig]      # Rich mask configuration from mask_selector
 
-    # Decision tracking
-    should_speak: bool
-    should_intervene: bool
-    intervention_type: Optional[str]
+    # === Decision & Script Output (v1.1) ===
+    decision: Optional[DecisionOutput]     # Structured decision from decision_node
+    script: Optional[ScriptOutput]         # Script from agentic_action
 
-    # Output
-    planned_actions: List[Dict[str, Any]]
+    # === Fear & Chaos (v1.1 - in-memory, resets per run) ===
+    player_fear: Dict[str, int]            # username -> 0-100 fear level
+    player_chaos: Dict[str, int]           # username -> chaos contribution
+    global_chaos: int                      # 0-100 global chaos level
+
+    # === Betrayal Debt (v1.1 - from PostgreSQL, persists) ===
+    betrayal_debts: Dict[str, Dict[str, int]]  # username -> {mask_type -> debt value}
+
+    # === Prophecy State (v1.1 - from PostgreSQL, persists) ===
+    prophecy_state: Dict[str, Any]         # Active prophecies, tracking
+
+    # === Output (v1.1 Enhanced) ===
+    planned_actions: List[PlannedAction]   # Now includes purpose field
+    approved_actions: List[PlannedAction]  # Post-protection validation
+    protection_warnings: List[str]         # Soft enforcement warnings
 
     # Timing
     timestamp: float
@@ -85,12 +145,24 @@ def create_initial_state() -> ErisState:
             "last_speech_time": 0,
             "intervention_count": 0
         },
+        # Persona
         current_mask=ErisMask.TRICKSTER,
-        mask_stability=0.7,
-        mood="neutral",
-        should_speak=False,
-        should_intervene=False,
-        intervention_type=None,
+        mask_config=None,
+        # Decision & Script
+        decision=None,
+        script=None,
+        # Fear & Chaos (in-memory, reset per run)
+        player_fear={},
+        player_chaos={},
+        global_chaos=0,
+        # Betrayal Debt (loaded from DB)
+        betrayal_debts={},
+        # Prophecy (loaded from DB)
+        prophecy_state={},
+        # Output
         planned_actions=[],
+        approved_actions=[],
+        protection_warnings=[],
+        # Timing
         timestamp=datetime.now().timestamp()
     )

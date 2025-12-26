@@ -1,7 +1,18 @@
+# LLM and Graph
+langchain>=0.3.0
+langchain-ollama>=0.2.0
+langgraph>=0.2.0
+
+# Core
 ollama>=0.1.0
 websockets>=12.0
 pydantic>=2.0
+pydantic-settings>=2.0
 httpx>=0.25.0
+asyncpg>=0.29.0
 psycopg2-binary>=2.9.0
 pyyaml>=6.0
+python-dotenv>=1.0.0
+
+# Development
 rich>=13.7.0
