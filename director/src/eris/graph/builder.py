@@ -16,8 +16,9 @@ from .nodes import (
     speak_node,
     tool_executor,
     agentic_action_node,
+    protection_decision_node,
 )
-from .edges import route_after_classification, route_after_decision, route_after_agentic, route_after_fast_response
+from .edges import route_after_classification, route_after_decision, route_after_agentic, route_after_fast_response, route_after_protection
 from ..tools.game_tools import create_game_tools
 
 logger = logging.getLogger(__name__)
@@ -64,6 +65,9 @@ def create_graph(
     async def _agentic_action(s):
         return await agentic_action_node(s, llm_with_tools)
 
+    async def _protection_decision(s):
+        return await protection_decision_node(s, llm, ws_client)
+
     def _noop(s):
         return s
 
@@ -76,6 +80,7 @@ def create_graph(
     graph.add_node("speak", _speak)
     graph.add_node("tool_executor", _tool_executor)
     graph.add_node("agentic_action", _agentic_action)
+    graph.add_node("protection_decision", _protection_decision)
 
     # Add ToolNode for executing LLM tool calls
     if tools:
@@ -90,14 +95,25 @@ def create_graph(
     graph.set_entry_point("event_classifier")
 
     # Conditional routing after classification
-    # Routes to: skip, fast_response, or context_enricher
+    # Routes to: skip, fast_response, protection_decision, or context_enricher
     graph.add_conditional_edges(
         "event_classifier",
         route_after_classification,
         {
             "skip": "skip",
             "fast_response": "fast_response",
+            "protection_decision": "protection_decision",
             "context_enricher": "context_enricher",
+        }
+    )
+
+    # Protection decision routes to tool_executor or ends
+    graph.add_conditional_edges(
+        "protection_decision",
+        route_after_protection,
+        {
+            "tool_executor": "tool_executor",
+            "end": END,
         }
     )
 

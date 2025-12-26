@@ -24,6 +24,9 @@ from .schemas import (
     ForceLookAtArgs,
     SpawnParticlesArgs,
     FakeDeathArgs,
+    ProtectPlayerArgs,
+    RescueTeleportArgs,
+    RespawnOverrideArgs,
 )
 
 if TYPE_CHECKING:
@@ -223,7 +226,7 @@ def create_game_tools(ws_client: "GameStateClient") -> List:
             {"particle": particle, "nearPlayer": near_player, "count": count, "spread": spread},
             reason="Eris Particles"
         )
-        return f"Spawned {count} {particle} particles near {player}."
+        return f"Spawned {count} {particle} particles near {near_player}."
 
     @tool("fake_death", args_schema=FakeDeathArgs)
     async def fake_death(player: str, cause: str = "fell"):
@@ -235,6 +238,41 @@ def create_game_tools(ws_client: "GameStateClient") -> List:
             reason="Eris Deception"
         )
         return f"Broadcast fake death for {player} ({cause})."
+
+    # ==================== DIVINE PROTECTION TOOLS ====================
+
+    @tool("protect_player", args_schema=ProtectPlayerArgs)
+    async def protect_player(player: str, aura_cost: int = 25):
+        """Provide divine protection to a player YOU endangered. Heals them to 50% health and grants brief resistance. Only works on players Eris recently targeted with mobs, TNT, effects, etc. Costs THEM aura as payment for salvation. Use when your chaos got too close to killing them."""
+        logger.info(f"🔧 Tool: protect_player(player={player}, aura_cost={aura_cost})")
+        await ws_client.send_command(
+            "protect",
+            {"player": player, "auraCost": aura_cost},
+            reason="Eris Divine Protection"
+        )
+        return f"Protected {player} (cost: {aura_cost} aura)"
+
+    @tool("rescue_teleport", args_schema=RescueTeleportArgs)
+    async def rescue_teleport(player: str, aura_cost: int = 20):
+        """Emergency teleport a player away from danger YOU caused. Moves them 10-20 blocks to safety without healing. Use when they're about to die to your mobs/TNT but you want them to survive wounded. Costs THEM aura."""
+        logger.info(f"🔧 Tool: rescue_teleport(player={player}, aura_cost={aura_cost})")
+        await ws_client.send_command(
+            "rescue",
+            {"player": player, "auraCost": aura_cost},
+            reason="Eris Rescue Teleport"
+        )
+        return f"Rescued {player} via teleport (cost: {aura_cost} aura)"
+
+    @tool("respawn_override", args_schema=RespawnOverrideArgs)
+    async def respawn_override(player: str, aura_cost: int = 50):
+        """Override a death caused by YOUR interventions. Player respawns as SPECTATOR near death, has 5 seconds to fly to safety, then switches to SURVIVAL. VERY RARE - only for Eris-caused deaths, max 2 per run. Heavy aura cost. Make it dramatic and memorable. The run continues instead of ending."""
+        logger.info(f"🔧 Tool: respawn_override(player={player}, aura_cost={aura_cost})")
+        await ws_client.send_command(
+            "respawn",
+            {"player": player, "auraCost": aura_cost},
+            reason="Eris Divine Respawn"
+        )
+        return f"Respawn override for {player} (cost: {aura_cost} aura)"
 
     return [
         spawn_mob,
@@ -256,4 +294,7 @@ def create_game_tools(ws_client: "GameStateClient") -> List:
         force_look_at,
         spawn_particles,
         fake_death,
+        protect_player,
+        rescue_teleport,
+        respawn_override,
     ]

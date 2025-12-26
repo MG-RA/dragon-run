@@ -10,6 +10,9 @@ import org.bukkit.entity.Player;
 import org.bukkit.event.EventHandler;
 import org.bukkit.event.EventPriority;
 import org.bukkit.event.Listener;
+import org.bukkit.entity.Entity;
+import org.bukkit.entity.Projectile;
+import org.bukkit.event.entity.EntityDamageByEntityEvent;
 import org.bukkit.event.entity.EntityDamageEvent;
 import org.bukkit.event.entity.PlayerDeathEvent;
 
@@ -85,32 +88,184 @@ public class DeathListener implements Listener {
             return;
         }
 
-        // 1. Get death cause and roast
+        // 1. Get death cause
         String deathCause = getDeathCause(event);
+
+        // 2. Check if this death was Eris-caused
+        boolean isErisCaused = checkIfErisCaused(event);
+
+        if (isErisCaused && plugin.getCausalityManager().canUseRespawn()) {
+            // Eris-caused death - give Python time to respond with respawn override
+            handleErisCausedDeath(event, player, uuid, playerName, deathCause);
+        } else {
+            // Normal death - process immediately
+            processNormalDeath(event, player, uuid, playerName, deathCause);
+        }
+    }
+
+    /**
+     * Handle an Eris-caused death - give Python 500ms to respond with respawn override.
+     */
+    private void handleErisCausedDeath(PlayerDeathEvent event, Player player, UUID uuid, String playerName, String deathCause) {
+        // Suppress vanilla death message
+        event.deathMessage(null);
+
+        // Store pending death
+        plugin.getCausalityManager().setPendingErisDeath(uuid, deathCause, player.getLocation());
+
+        // Send event to Python
+        com.google.gson.JsonObject data = new com.google.gson.JsonObject();
+        data.addProperty("player", playerName);
+        data.addProperty("playerUuid", uuid.toString());
+        data.addProperty("cause", deathCause);
+        data.addProperty("isErisCaused", true);
+        data.addProperty("respawnsRemaining", plugin.getCausalityManager().getRemainingRespawns());
+        if (plugin.getDirectorServer() != null) {
+            plugin.getDirectorServer().broadcastEvent("eris_caused_death", data);
+        }
+
+        plugin.getLogger().info("Eris-caused death detected for " + playerName + " - waiting 500ms for Python response");
+
+        // Give Python 500ms to respond with respawn override
+        Bukkit.getScheduler().runTaskLater(plugin, () -> {
+            if (plugin.getCausalityManager().hasPendingDeath(uuid)) {
+                // Python didn't intervene, proceed with normal death
+                plugin.getLogger().info("No respawn override received for " + playerName + " - processing death normally");
+                plugin.getCausalityManager().clearPendingDeath(uuid);
+                processNormalDeathDelayed(player, uuid, playerName, deathCause);
+            } else {
+                plugin.getLogger().info("Respawn override was used for " + playerName);
+            }
+        }, 10L); // 10 ticks = 500ms
+    }
+
+    /**
+     * Process a normal death immediately.
+     */
+    private void processNormalDeath(PlayerDeathEvent event, Player player, UUID uuid, String playerName, String deathCause) {
         String roast = getRoast(deathCause);
 
-        // 2. Remove aura based on death type
+        // Remove aura based on death type
         int auraLoss = getAuraLoss(deathCause);
         plugin.getAuraManager().removeAura(uuid, auraLoss, "died (" + deathCause.toLowerCase() + ")");
 
-        // 3. Increment death count
+        // Increment death count
         plugin.getAuraManager().incrementDeathCount(uuid);
 
-        // 4. Broadcast death with roast
+        // Broadcast death with roast
         Component deathMessage = MessageUtil.deathAnnouncement(playerName, roast);
         Bukkit.broadcast(deathMessage);
 
-        // 5. Override vanilla death message
+        // Override vanilla death message
         event.deathMessage(null);
 
-        // 6. Process bets (all bets on deceased are lost, deceased bets are cleared)
+        // Process bets
         plugin.getBettingManager().processDeath(uuid);
 
-        // 7. End the run (handles teleport to lobby and world cleanup)
+        // End the run
         plugin.getRunManager().endRunByDeath(uuid);
 
-        // 8. Show reset countdown (visual only - RunManager handles actual reset)
+        // Show reset countdown
         showResetCountdown(playerName);
+    }
+
+    /**
+     * Process a death that was delayed waiting for Python response.
+     */
+    private void processNormalDeathDelayed(Player player, UUID uuid, String playerName, String deathCause) {
+        String roast = getRoast(deathCause);
+
+        // Remove aura based on death type
+        int auraLoss = getAuraLoss(deathCause);
+        plugin.getAuraManager().removeAura(uuid, auraLoss, "died (" + deathCause.toLowerCase() + ")");
+
+        // Increment death count
+        plugin.getAuraManager().incrementDeathCount(uuid);
+
+        // Broadcast death with roast
+        Component deathMessage = MessageUtil.deathAnnouncement(playerName, roast);
+        Bukkit.broadcast(deathMessage);
+
+        // Process bets
+        plugin.getBettingManager().processDeath(uuid);
+
+        // End the run
+        plugin.getRunManager().endRunByDeath(uuid);
+
+        // Show reset countdown
+        showResetCountdown(playerName);
+    }
+
+    /**
+     * Check if a death was caused by Eris's interventions.
+     */
+    private boolean checkIfErisCaused(PlayerDeathEvent event) {
+        EntityDamageEvent damageEvent = event.getEntity().getLastDamageCause();
+        if (damageEvent == null) return false;
+
+        var causalityManager = plugin.getCausalityManager();
+
+        // Check entity attack (mobs spawned by Eris)
+        if (damageEvent instanceof EntityDamageByEntityEvent entityDamage) {
+            Entity damager = entityDamage.getDamager();
+
+            // Direct entity damage
+            if (causalityManager.isErisCaused(damager)) {
+                return true;
+            }
+
+            // Projectile from Eris-spawned entity
+            if (damager instanceof Projectile projectile) {
+                if (projectile.getShooter() instanceof Entity shooter) {
+                    if (causalityManager.isErisCaused(shooter)) {
+                        return true;
+                    }
+                }
+            }
+        }
+
+        // Check block explosion (TNT spawned by Eris)
+        if (damageEvent.getCause() == EntityDamageEvent.DamageCause.BLOCK_EXPLOSION) {
+            if (causalityManager.wasRecentErisTntNear(event.getEntity().getLocation())) {
+                return true;
+            }
+        }
+
+        // Check entity explosion (creeper spawned by Eris)
+        if (damageEvent.getCause() == EntityDamageEvent.DamageCause.ENTITY_EXPLOSION) {
+            if (damageEvent instanceof EntityDamageByEntityEvent entityDamage) {
+                if (causalityManager.isErisCaused(entityDamage.getDamager())) {
+                    return true;
+                }
+            }
+        }
+
+        // Check effects (poison, wither from Eris)
+        if (damageEvent.getCause() == EntityDamageEvent.DamageCause.POISON ||
+            damageEvent.getCause() == EntityDamageEvent.DamageCause.WITHER) {
+            if (causalityManager.isErisEffect(event.getEntity().getUniqueId(),
+                    damageEvent.getCause().name().toLowerCase())) {
+                return true;
+            }
+        }
+
+        // Check falling block (anvil, dripstone from Eris)
+        if (damageEvent.getCause() == EntityDamageEvent.DamageCause.FALLING_BLOCK) {
+            if (damageEvent instanceof EntityDamageByEntityEvent blockDamage) {
+                if (causalityManager.isErisCaused(blockDamage.getDamager())) {
+                    return true;
+                }
+            }
+        }
+
+        // Check lightning (from Eris)
+        if (damageEvent.getCause() == EntityDamageEvent.DamageCause.LIGHTNING) {
+            if (causalityManager.wasRecentErisLightningNear(event.getEntity().getLocation())) {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     /**

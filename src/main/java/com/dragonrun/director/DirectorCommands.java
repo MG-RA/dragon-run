@@ -395,6 +395,51 @@ public class DirectorCommands {
                         )
                     )
                 )
+                .then(Commands.literal("protect")
+                    .then(Commands.argument("player", StringArgumentType.word())
+                        .executes(ctx -> {
+                            String player = StringArgumentType.getString(ctx, "player");
+                            return executeProtect(ctx.getSource(), player, 25);
+                        })
+                        .then(Commands.argument("auraCost", IntegerArgumentType.integer(10, 100))
+                            .executes(ctx -> {
+                                String player = StringArgumentType.getString(ctx, "player");
+                                int auraCost = IntegerArgumentType.getInteger(ctx, "auraCost");
+                                return executeProtect(ctx.getSource(), player, auraCost);
+                            })
+                        )
+                    )
+                )
+                .then(Commands.literal("rescue")
+                    .then(Commands.argument("player", StringArgumentType.word())
+                        .executes(ctx -> {
+                            String player = StringArgumentType.getString(ctx, "player");
+                            return executeRescueTeleport(ctx.getSource(), player, 20);
+                        })
+                        .then(Commands.argument("auraCost", IntegerArgumentType.integer(10, 50))
+                            .executes(ctx -> {
+                                String player = StringArgumentType.getString(ctx, "player");
+                                int auraCost = IntegerArgumentType.getInteger(ctx, "auraCost");
+                                return executeRescueTeleport(ctx.getSource(), player, auraCost);
+                            })
+                        )
+                    )
+                )
+                .then(Commands.literal("respawn")
+                    .then(Commands.argument("player", StringArgumentType.word())
+                        .executes(ctx -> {
+                            String player = StringArgumentType.getString(ctx, "player");
+                            return executeRespawnOverride(ctx.getSource(), player, 50);
+                        })
+                        .then(Commands.argument("auraCost", IntegerArgumentType.integer(25, 200))
+                            .executes(ctx -> {
+                                String player = StringArgumentType.getString(ctx, "player");
+                                int auraCost = IntegerArgumentType.getInteger(ctx, "auraCost");
+                                return executeRespawnOverride(ctx.getSource(), player, auraCost);
+                            })
+                        )
+                    )
+                )
                 .build(),
             "Director AI commands",
             java.util.List.of()
@@ -460,7 +505,9 @@ public class DirectorCommands {
             // Find safe spawn location (not inside blocks)
             Location spawnLoc = findSafeSpawnLocation(baseLoc);
             if (spawnLoc != null) {
-                player.getWorld().spawnEntity(spawnLoc, entityType);
+                org.bukkit.entity.Entity spawned = player.getWorld().spawnEntity(spawnLoc, entityType);
+                // Register with CausalityManager for divine protection system
+                plugin.getCausalityManager().registerErisMob(spawned, player.getUniqueId(), mobType);
             }
         }
 
@@ -514,8 +561,20 @@ public class DirectorCommands {
         PotionEffect effect = new PotionEffect(effectType, duration * 20, amplifier);
         player.addPotionEffect(effect);
 
+        // Register harmful effects with CausalityManager for divine protection system
+        if (isHarmfulEffect(effectName)) {
+            plugin.getCausalityManager().registerErisEffect(player.getUniqueId(), effectName);
+        }
+
         source.getSender().sendMessage(Component.text("Applied " + effectName + " to " + playerName, NamedTextColor.GREEN));
         return 1;
+    }
+
+    private boolean isHarmfulEffect(String effectName) {
+        String lower = effectName.toLowerCase();
+        return lower.equals("poison") || lower.equals("wither") || lower.equals("harm") ||
+               lower.equals("slowness") || lower.equals("weakness") || lower.equals("hunger") ||
+               lower.equals("mining_fatigue") || lower.equals("blindness") || lower.equals("nausea");
     }
 
     private int executeLightning(CommandSourceStack source, String playerName) {
@@ -543,6 +602,9 @@ public class DirectorCommands {
 
         Location strikeLoc = player.getLocation().add(offsetX, 0, offsetZ);
         player.getWorld().strikeLightning(strikeLoc);
+
+        // Register lightning with CausalityManager for divine protection system
+        plugin.getCausalityManager().registerErisLightning(strikeLoc, player.getUniqueId());
 
         source.getSender().sendMessage(Component.text("Lightning struck near " + playerName, NamedTextColor.GREEN));
         return 1;
@@ -843,6 +905,9 @@ public class DirectorCommands {
             org.bukkit.entity.TNTPrimed tnt = player.getWorld().spawn(spawnLoc, org.bukkit.entity.TNTPrimed.class);
             tnt.setFuseTicks(fuseTicks);
 
+            // Register with CausalityManager for divine protection system
+            plugin.getCausalityManager().registerErisTnt(tnt, player.getUniqueId());
+
             // Add some initial velocity for dramatic effect
             double vx = (Math.random() - 0.5) * 0.3;
             double vy = 0.1 + Math.random() * 0.2;
@@ -896,6 +961,9 @@ public class DirectorCommands {
             // Make sure it can hurt entities
             fallingBlock.setHurtEntities(true);
             fallingBlock.setDropItem(false); // Don't drop item when it lands
+
+            // Register with CausalityManager for divine protection system
+            plugin.getCausalityManager().registerErisFallingBlock(fallingBlock, player.getUniqueId(), blockType);
 
             // Anvils and dripstone do more damage
             if (blockMaterial == Material.ANVIL || blockMaterial == Material.POINTED_DRIPSTONE) {
@@ -1103,5 +1171,222 @@ public class DirectorCommands {
 
         source.getSender().sendMessage(Component.text("Broadcast fake death for " + playerName, NamedTextColor.GREEN));
         return 1;
+    }
+
+    // ==================== DIVINE PROTECTION COMMANDS ====================
+
+    private int executeProtect(CommandSourceStack source, String playerName, int auraCost) {
+        Player player = Bukkit.getPlayer(playerName);
+        if (player == null) {
+            source.getSender().sendMessage(Component.text("Player not found: " + playerName, NamedTextColor.RED));
+            return 0;
+        }
+
+        // Heal to 50% health
+        double targetHealth = player.getMaxHealth() * 0.5;
+        player.setHealth(Math.max(player.getHealth(), targetHealth));
+
+        // Apply short resistance effect (3 seconds, level 1)
+        player.addPotionEffect(new PotionEffect(PotionEffectType.RESISTANCE, 60, 1));
+
+        // Apply aura cost
+        plugin.getAuraManager().removeAura(player.getUniqueId(), auraCost, "divine protection from Eris");
+
+        // Visual effects - totem animation
+        player.getWorld().spawnParticle(Particle.TOTEM_OF_UNDYING, player.getLocation().add(0, 1, 0), 50, 0.5, 1, 0.5, 0.1);
+        player.playSound(player.getLocation(), org.bukkit.Sound.ITEM_TOTEM_USE, 1.0f, 1.0f);
+
+        // Send WebSocket event so Python knows protection was used
+        com.google.gson.JsonObject data = new com.google.gson.JsonObject();
+        data.addProperty("player", playerName);
+        data.addProperty("auraCost", auraCost);
+        data.addProperty("healthAfter", player.getHealth());
+        if (plugin.getDirectorServer() != null) {
+            plugin.getDirectorServer().broadcastEvent("eris_protection_used", data);
+        }
+
+        source.getSender().sendMessage(Component.text("Protected " + playerName + " (cost: " + auraCost + " aura)", NamedTextColor.GREEN));
+        return 1;
+    }
+
+    private int executeRescueTeleport(CommandSourceStack source, String playerName, int auraCost) {
+        Player player = Bukkit.getPlayer(playerName);
+        if (player == null) {
+            source.getSender().sendMessage(Component.text("Player not found: " + playerName, NamedTextColor.RED));
+            return 0;
+        }
+
+        Location current = player.getLocation();
+        World world = current.getWorld();
+
+        // Find a safe location away from danger (10-20 blocks away)
+        Location safeLoc = null;
+        for (int attempts = 0; attempts < 20; attempts++) {
+            double angle = Math.random() * 2 * Math.PI;
+            double distance = 10 + Math.random() * 10;
+            double x = current.getX() + Math.cos(angle) * distance;
+            double z = current.getZ() + Math.sin(angle) * distance;
+            int y = world.getHighestBlockYAt((int) x, (int) z);
+
+            Location candidate = new Location(world, x, y + 1, z);
+            if (isSafeRescueLocation(candidate)) {
+                safeLoc = candidate;
+                break;
+            }
+        }
+
+        if (safeLoc == null) {
+            // Fallback: teleport straight up
+            safeLoc = current.clone().add(0, 5, 0);
+        }
+
+        // Visual effect before teleport
+        player.getWorld().spawnParticle(Particle.REVERSE_PORTAL, player.getLocation().add(0, 1, 0), 30, 0.3, 0.5, 0.3, 0.05);
+
+        // Teleport player
+        player.teleport(safeLoc);
+
+        // Visual effect after teleport
+        player.getWorld().spawnParticle(Particle.REVERSE_PORTAL, safeLoc.add(0, 1, 0), 30, 0.3, 0.5, 0.3, 0.05);
+        player.playSound(safeLoc, org.bukkit.Sound.ENTITY_ENDERMAN_TELEPORT, 1.0f, 1.0f);
+
+        // Apply aura cost
+        plugin.getAuraManager().removeAura(player.getUniqueId(), auraCost, "rescue teleport from Eris");
+
+        // Send WebSocket event
+        com.google.gson.JsonObject data = new com.google.gson.JsonObject();
+        data.addProperty("player", playerName);
+        data.addProperty("auraCost", auraCost);
+        if (plugin.getDirectorServer() != null) {
+            plugin.getDirectorServer().broadcastEvent("eris_rescue_used", data);
+        }
+
+        source.getSender().sendMessage(Component.text("Rescued " + playerName + " via teleport (cost: " + auraCost + " aura)", NamedTextColor.GREEN));
+        return 1;
+    }
+
+    private boolean isSafeRescueLocation(Location loc) {
+        World world = loc.getWorld();
+        int x = loc.getBlockX();
+        int y = loc.getBlockY();
+        int z = loc.getBlockZ();
+
+        // Check feet and head are air
+        if (!world.getBlockAt(x, y, z).getType().isAir()) return false;
+        if (!world.getBlockAt(x, y + 1, z).getType().isAir()) return false;
+
+        // Check ground is solid and safe
+        Material ground = world.getBlockAt(x, y - 1, z).getType();
+        if (!ground.isSolid()) return false;
+        if (ground == Material.LAVA || ground == Material.MAGMA_BLOCK) return false;
+        if (ground == Material.CACTUS || ground == Material.SWEET_BERRY_BUSH) return false;
+
+        // Check not near lava
+        for (int dx = -2; dx <= 2; dx++) {
+            for (int dz = -2; dz <= 2; dz++) {
+                for (int dy = -1; dy <= 1; dy++) {
+                    if (world.getBlockAt(x + dx, y + dy, z + dz).getType() == Material.LAVA) {
+                        return false;
+                    }
+                }
+            }
+        }
+
+        return true;
+    }
+
+    private int executeRespawnOverride(CommandSourceStack source, String playerName, int auraCost) {
+        Player player = Bukkit.getPlayer(playerName);
+        if (player == null) {
+            source.getSender().sendMessage(Component.text("Player not found: " + playerName, NamedTextColor.RED));
+            return 0;
+        }
+
+        // Check if respawns are available
+        if (!plugin.getCausalityManager().canUseRespawn()) {
+            source.getSender().sendMessage(Component.text("No respawns remaining this run", NamedTextColor.RED));
+            return 0;
+        }
+
+        // Clear pending death
+        plugin.getCausalityManager().clearPendingDeath(player.getUniqueId());
+
+        // Mark respawn as used
+        plugin.getCausalityManager().useRespawn();
+
+        // Apply aura cost
+        plugin.getAuraManager().removeAura(player.getUniqueId(), auraCost, "divine respawn intervention");
+
+        // Get death location for spectator spawn
+        Location deathLoc = player.getLocation();
+
+        // Schedule the respawn flow (player needs to respawn first)
+        Bukkit.getScheduler().runTaskLater(plugin, () -> {
+            // Force respawn if not already
+            if (player.isDead()) {
+                player.spigot().respawn();
+            }
+
+            plugin.getWorldManager().teleportToHardcore(player);
+
+            // Set to spectator mode at death location
+            player.setGameMode(org.bukkit.GameMode.SPECTATOR);
+            player.teleport(deathLoc.add(0, 2, 0)); // Slightly above death location
+
+            // Show countdown title
+            showRespawnCountdown(player, 5);
+
+            // After 5 seconds, switch to survival at current location
+            Bukkit.getScheduler().runTaskLater(plugin, () -> {
+                Location finalLoc = player.getLocation();
+                player.setGameMode(org.bukkit.GameMode.SURVIVAL);
+                player.teleport(finalLoc);
+                player.setHealth(player.getMaxHealth() * 0.5);
+                player.setFoodLevel(20);
+
+                // Dramatic effects
+                player.getWorld().strikeLightningEffect(finalLoc);
+                player.getWorld().spawnParticle(Particle.TOTEM_OF_UNDYING, finalLoc.add(0, 1, 0), 100, 1, 2, 1, 0.1);
+
+                // Broadcast message
+                MiniMessage mm = MiniMessage.miniMessage();
+                Bukkit.broadcast(mm.deserialize(
+                    "<gold><b>DIVINE INTERVENTION</b></gold> <dark_gray>-</dark_gray> <light_purple>Eris has spared <white>" + playerName + "</white>... <i>this time.</i></light_purple>"
+                ));
+            }, 100L); // 5 seconds = 100 ticks
+        }, 1L);
+
+        // Send WebSocket event
+        com.google.gson.JsonObject data = new com.google.gson.JsonObject();
+        data.addProperty("player", playerName);
+        data.addProperty("auraCost", auraCost);
+        data.addProperty("respawnsRemaining", plugin.getCausalityManager().getRemainingRespawns());
+        if (plugin.getDirectorServer() != null) {
+            plugin.getDirectorServer().broadcastEvent("eris_respawn_override", data);
+        }
+
+        source.getSender().sendMessage(Component.text("Respawn override for " + playerName + " (cost: " + auraCost + " aura)", NamedTextColor.GREEN));
+        return 1;
+    }
+
+    private void showRespawnCountdown(Player player, int seconds) {
+        if (seconds <= 0) return;
+
+        MiniMessage mm = MiniMessage.miniMessage();
+        player.showTitle(net.kyori.adventure.title.Title.title(
+            mm.deserialize("<gold><b>DIVINE INTERVENTION</b></gold>"),
+            mm.deserialize("<gray>Find a safe spot... <white>" + seconds + "</white></gray>"),
+            net.kyori.adventure.title.Title.Times.times(
+                java.time.Duration.ZERO,
+                java.time.Duration.ofMillis(1100),
+                java.time.Duration.ZERO
+            )
+        ));
+
+        // Play tick sound
+        player.playSound(player.getLocation(), org.bukkit.Sound.BLOCK_NOTE_BLOCK_PLING, 0.5f, 1.0f + (5 - seconds) * 0.1f);
+
+        // Schedule next countdown
+        Bukkit.getScheduler().runTaskLater(plugin, () -> showRespawnCountdown(player, seconds - 1), 20L);
     }
 }

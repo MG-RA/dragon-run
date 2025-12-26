@@ -15,6 +15,7 @@ import com.dragonrun.listeners.LobbyProtectionListener;
 import com.dragonrun.managers.AchievementManager;
 import com.dragonrun.managers.AuraManager;
 import com.dragonrun.managers.BettingManager;
+import com.dragonrun.managers.ErisCausalityManager;
 import com.dragonrun.managers.RunManager;
 import com.dragonrun.managers.ScoreboardManager;
 import com.dragonrun.managers.VoteManager;
@@ -36,6 +37,7 @@ public class DragonRunPlugin extends JavaPlugin {
     private BettingManager bettingManager;
     private VoteManager voteManager;
     private ScoreboardManager scoreboardManager;
+    private ErisCausalityManager causalityManager;
     private AchievementListener achievementListener;
     private com.dragonrun.listeners.ResourceMilestoneListener resourceMilestoneListener;
     private com.dragonrun.listeners.MobKillListener mobKillListener;
@@ -73,6 +75,7 @@ public class DragonRunPlugin extends JavaPlugin {
         bettingManager = new BettingManager(this, database);
         voteManager = new VoteManager(this);
         scoreboardManager = new ScoreboardManager(this);
+        causalityManager = new ErisCausalityManager(this);
 
         // 5. Register listeners
         getServer().getPluginManager().registerEvents(new DeathListener(this), this);
@@ -195,6 +198,10 @@ public class DragonRunPlugin extends JavaPlugin {
 
     public VoteManager getVoteManager() {
         return voteManager;
+    }
+
+    public ErisCausalityManager getCausalityManager() {
+        return causalityManager;
     }
 
     public DirectorWebSocketServer getDirectorServer() {

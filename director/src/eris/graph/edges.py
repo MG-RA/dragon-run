@@ -1,21 +1,42 @@
 """Edge routing logic for LangGraph."""
 
+import logging
 from ..graph.state import ErisState, EventPriority
+
+logger = logging.getLogger(__name__)
 
 
 def route_after_classification(state: ErisState) -> str:
     """Route based on event priority."""
     priority = state.get("event_priority", EventPriority.ROUTINE)
+    event = state.get("current_event")
+    event_type = event.get("eventType", "") if event else ""
 
     if priority == EventPriority.LOW:
         return "skip"  # Don't process low-priority state updates
 
+    # Fast path for protection events - need quick response
+    if event_type in ("eris_close_call", "eris_caused_death"):
+        logger.info(f"🚨 ROUTING {event_type} -> protection_decision")
+        return "protection_decision"
+
     if priority == EventPriority.HIGH:
-        event = state.get("current_event")
-        if event and event.get("eventType") == "player_chat":
+        if event and event_type == "player_chat":
             return "fast_response"  # Fast path for chat
 
     return "context_enricher"  # Default: enrich context
+
+
+def route_after_protection(state: ErisState) -> str:
+    """Route after protection decision."""
+    planned_actions = state.get("planned_actions", [])
+
+    # If we have actions to execute, go to tool executor
+    if planned_actions:
+        return "tool_executor"
+
+    # Otherwise, end (no protection used)
+    return "end"
 
 
 def route_after_decision(state: ErisState) -> str:

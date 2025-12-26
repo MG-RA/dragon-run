@@ -203,6 +203,22 @@ public class DirectorCommandExecutor {
                 String cause = params.has("cause") ? params.get("cause").getAsString() : "fell";
                 yield "director fakedeath " + player + " " + cause;
             }
+            // Divine Protection System commands
+            case "protect" -> {
+                String player = params.get("player").getAsString();
+                int auraCost = params.has("auraCost") ? params.get("auraCost").getAsInt() : 25;
+                yield "director protect " + player + " " + auraCost;
+            }
+            case "rescue" -> {
+                String player = params.get("player").getAsString();
+                int auraCost = params.has("auraCost") ? params.get("auraCost").getAsInt() : 20;
+                yield "director rescue " + player + " " + auraCost;
+            }
+            case "respawn" -> {
+                String player = params.get("player").getAsString();
+                int auraCost = params.has("auraCost") ? params.get("auraCost").getAsInt() : 50;
+                yield "director respawn " + player + " " + auraCost;
+            }
             default -> null;
         };
     }

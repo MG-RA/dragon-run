@@ -114,6 +114,9 @@ class EventProcessor:
             "player_death": EventPriority.CRITICAL,
             "dragon_killed": EventPriority.CRITICAL,
             "boss_killed": EventPriority.CRITICAL,  # Wither, Elder Guardian, Warden
+            # Critical - protection system events (need immediate response)
+            "eris_caused_death": EventPriority.CRITICAL,  # Player killed by Eris - 500ms to respond!
+            "eris_close_call": EventPriority.CRITICAL,  # Player nearly killed by Eris
             # High - player interactions and significant progress
             "player_chat": EventPriority.HIGH,
             "player_damaged": EventPriority.HIGH,
@@ -127,6 +130,8 @@ class EventProcessor:
             "run_started": EventPriority.MEDIUM,
             "run_ended": EventPriority.MEDIUM,
             "run_starting": EventPriority.MEDIUM,
+            "eris_protection_used": EventPriority.MEDIUM,  # Protection was activated
+            "eris_respawn_override": EventPriority.MEDIUM,  # Respawn was used
             # Low - batched/aggregate data
             "mob_kills_batch": EventPriority.LOW,  # Aggregated kill data
             "state": EventPriority.LOW,

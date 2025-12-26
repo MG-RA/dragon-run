@@ -2,6 +2,7 @@
 
 import random
 import logging
+from datetime import datetime
 from typing import Any, Dict
 
 from langchain_core.messages import HumanMessage, SystemMessage
@@ -31,6 +32,10 @@ async def event_classifier(state: ErisState) -> Dict[str, Any]:
         "player_death": EventPriority.CRITICAL,
         "player_death_detailed": EventPriority.CRITICAL,
         "dragon_killed": EventPriority.CRITICAL,
+        # Critical - protection system events
+        "eris_close_call": EventPriority.CRITICAL,  # Player endangered by Eris
+        "eris_caused_death": EventPriority.CRITICAL,  # Player died to Eris
+        "eris_respawn_override": EventPriority.CRITICAL,  # Respawn was used
         # High - usually speak
         "player_chat": EventPriority.HIGH,
         "player_damaged": EventPriority.HIGH,
@@ -47,6 +52,8 @@ async def event_classifier(state: ErisState) -> Dict[str, Any]:
         "run_ended": EventPriority.MEDIUM,
         "boss_killed": EventPriority.MEDIUM,  # Wither, Elder Guardian, Warden
         "idle_check": EventPriority.MEDIUM,  # Proactive check when quiet
+        "eris_protection_used": EventPriority.MEDIUM,  # Protection was activated
+        "eris_rescue_used": EventPriority.MEDIUM,  # Rescue teleport was used
         # Low - rarely speak
         "mob_kills_batch": EventPriority.LOW,
         "state": EventPriority.LOW,
@@ -67,6 +74,10 @@ async def event_classifier(state: ErisState) -> Dict[str, Any]:
     if event_type == "advancement_made":
         if event.get("data", {}).get("isCritical"):
             priority = EventPriority.HIGH
+
+    # Log critical protection events
+    if event_type in ("eris_close_call", "eris_caused_death"):
+        logger.info(f"🚨 PROTECTION EVENT: {event_type} - priority={priority.name}")
 
     return {"event_priority": priority}
 
@@ -314,6 +325,7 @@ async def fast_response(state: ErisState, llm_with_tools: Any) -> Dict[str, Any]
     """
     Fast path for chat responses - now with tool calling support!
     Can respond to chat AND take actions like spawning mobs, changing weather, etc.
+    Now enriched with more context for situationally-aware responses.
     """
     from langchain_core.messages import AIMessage
 
@@ -323,30 +335,83 @@ async def fast_response(state: ErisState, llm_with_tools: Any) -> Dict[str, Any]
     message = chat_data.get("message", "")
     mask = state.get("current_mask", ErisMask.TRICKSTER)
 
-    # Build context for better responses
-    context_str = _build_context(state)
-
-    # Get the actual player list to prevent hallucination
+    # Get game state and player info
     game_state = state.get("game_state", {})
     players = game_state.get("players", [])
-    player_names = [p.get("username", "Unknown") for p in players if p.get("username")]
+    player_histories = state.get("player_histories", {})
+    context_buffer = state.get("context_buffer", "")
 
+    # Build enriched context for fast_response
+    context_lines = []
+
+    # Run state
+    run_state = game_state.get("gameState", "UNKNOWN")
+    run_duration = game_state.get("runDuration", 0)
+    if run_duration:
+        minutes = run_duration // 60
+        context_lines.append(f"Run: {run_state} ({minutes}m in)")
+    else:
+        context_lines.append(f"Run: {run_state}")
+
+    # Speaker info (the player who chatted)
+    speaker_data = next((p for p in players if p.get("username") == player), None)
+    if speaker_data:
+        health = speaker_data.get("health", 20)
+        dimension = speaker_data.get("dimension", "Overworld")
+        speaker_history = player_histories.get(player, {})
+        total_runs = speaker_history.get("total_runs", 0)
+        aura = speaker_history.get("aura", 0)
+        trend = speaker_history.get("trend", "")
+
+        exp_label = "new" if total_runs == 0 else f"{total_runs} runs"
+        trend_str = f", {trend}" if trend else ""
+
+        context_lines.append(f"Speaker: {player} - {health:.0f}♥ in {dimension}, {exp_label}, {aura} aura{trend_str}")
+
+    # Other players summary
+    other_players = [p for p in players if p.get("username") != player]
+    if other_players:
+        others_summary = []
+        for p in other_players[:3]:  # Max 3 others
+            name = p.get("username", "Unknown")
+            hp = p.get("health", 20)
+            dim = p.get("dimension", "OW")[:2]  # Abbreviate dimension
+            others_summary.append(f"{name}({hp:.0f}♥ {dim})")
+        context_lines.append(f"Others: {', '.join(others_summary)}")
+
+    # Recent events (last 5)
+    if context_buffer:
+        recent = context_buffer.strip().split("\n")[-5:]
+        if recent:
+            context_lines.append("Recent: " + " | ".join(recent))
+
+    # Build player list for targeting
+    player_names = [p.get("username", "Unknown") for p in players if p.get("username")]
     if player_names:
         player_list_str = ", ".join(player_names)
         player_instruction = f"\n\nCURRENT PLAYERS (ONLY use these names): {player_list_str}"
     else:
         player_instruction = ""
 
+    enriched_context = "\n".join(context_lines)
+
     # Enhanced prompt that REQUIRES tool usage for responses
     prompt = f"""You are ERIS, the chaotic AI Director of Dragon Run ({mask.value} mask).
 
-CONTEXT:
-{context_str}
+SITUATION:
+{enriched_context}
 {player_instruction}
 
 Player "{player}" just said: "{message}"
 
 IMPORTANT: You MUST use the broadcast tool to respond! Do not just write text - use the tool!
+
+You can reference recent events or player state in your response:
+- If they just died recently: mock them
+- If they're low health: comment on their mortality
+- If they're in the Nether/End: reference the danger
+- If they're a veteran: acknowledge their experience
+- If they're new: welcome them to the chaos
 
 Available tools:
 - broadcast: Send a message to all players (USE THIS TO RESPOND!)
@@ -372,6 +437,7 @@ NOT markdown: **bold**, *italic*
 
 GOOD: "The <dark_purple>void</dark_purple> watches..." (5 words)
 GOOD: "How <i>delightful</i>, {player}." (3 words)
+GOOD: "Still recovering from that creeper, <gold>{player}</gold>?" (reference recent event)
 BAD: "Ahhh, so you dare speak to me? Very well, let the chaos begin..." (too long!)
 
 Be {mask.value}!
@@ -710,3 +776,181 @@ def _build_context(state: ErisState) -> str:
         logger.info(f"📊 Event breakdown: {event_type_counts}")
 
     return context_str if lines else "No context available."
+
+
+# ==================== PROTECTION DECISION NODE ====================
+
+
+async def protection_decision_node(state: ErisState, llm: Any, ws_client: Any = None) -> Dict[str, Any]:
+    """
+    Fast decision node for protection/respawn checks.
+    Called when a player is in danger from Eris's interventions.
+    Must decide quickly whether to protect or let fate take its course.
+
+    CRITICAL: For death events, we must execute the respawn command IMMEDIATELY
+    because Java only waits 500ms for a response. We can't defer to tool_executor.
+    """
+    from ..core.causality import get_causality_tracker
+
+    event = state.get("current_event")
+    if not event:
+        return {}
+
+    event_type = event.get("eventType", "")
+    event_data = event.get("data", {})
+
+    # Only handle protection events
+    if event_type not in ("eris_close_call", "eris_caused_death"):
+        return {}
+
+    player = event_data.get("player", "Unknown")
+    health = event_data.get("healthAfter", 0)
+    damage_source = event_data.get("source", event_data.get("cause", "unknown"))
+    is_death = event_type == "eris_caused_death"
+
+    tracker = get_causality_tracker()
+    mask = state.get("current_mask", ErisMask.TRICKSTER)
+
+    logger.info(f"🛡️ Protection decision for {player}: is_death={is_death}, health={health}, source={damage_source}")
+
+    # Check if protection/respawn is available
+    if is_death:
+        if not tracker.can_respawn():
+            logger.info(f"🛡️ Respawn not available (limit reached)")
+            return {}
+        # For death events, we trust the Java side already checked if it was Eris-caused
+    else:
+        # For close calls, Java already verified this was Eris-caused by sending eris_close_call
+        # We just check cooldown (30 seconds between protections per player)
+        cooldown = tracker.protection_cooldowns.get(player)
+        if cooldown and datetime.now() < cooldown:
+            logger.info(f"🛡️ Protection on cooldown for {player} until {cooldown}")
+            return {}
+
+    # For death events, we need to act IMMEDIATELY - no time for LLM decision
+    # Java only waits 500ms and LLM calls can take longer
+    if is_death:
+        logger.info(f"🛡️ URGENT: Death event - executing respawn immediately (no LLM wait)")
+
+        if ws_client is None:
+            logger.error("🛡️ Cannot execute respawn - no ws_client available!")
+            return {}
+
+        aura_cost = 50
+        tracker.use_respawn()
+        tracker.record_intervention(player, "respawn")
+
+        # Execute respawn command IMMEDIATELY
+        try:
+            await ws_client.send_command(
+                "respawn",
+                {"player": player, "auraCost": aura_cost},
+                reason="Eris Divine Respawn"
+            )
+            logger.info(f"🛡️ ✅ Respawn command sent for {player}")
+
+            # Also broadcast the dramatic message
+            await ws_client.send_command(
+                "broadcast",
+                {"message": f"<gold><b>DIVINE INTERVENTION</b></gold>... <white>{player}</white> is not done yet."},
+                reason="Eris Divine Respawn"
+            )
+
+            return {
+                "planned_actions": [],  # Already executed
+                "should_speak": False,
+                "should_intervene": True,
+            }
+        except Exception as e:
+            logger.error(f"🛡️ Failed to send respawn command: {e}")
+            return {}
+
+    # For non-death events (close calls), we can use LLM decision
+    # Quick LLM decision with mask influence
+    mask_guidance = {
+        ErisMask.TRICKSTER: "As TRICKSTER: You love the game continuing. More chaos to come!",
+        ErisMask.PROPHET: "As PROPHET: You foresaw this. Was it meant to be, or will you change fate?",
+        ErisMask.FRIEND: "As FRIEND: They trusted you. This is your chance to show false mercy...",
+        ErisMask.CHAOS_BRINGER: "As CHAOS_BRINGER: Destruction is beautiful, but so is prolonged suffering...",
+        ErisMask.OBSERVER: "As OBSERVER: You rarely intervene. Is this moment worthy?",
+        ErisMask.GAMBLER: "As GAMBLER: The odds are interesting. What's your play?",
+    }
+
+    prompt = f"""URGENT: {player} is CRITICALLY LOW ({health:.0f} HP) from {damage_source}.
+
+This was caused by YOUR intervention (mobs, TNT, lightning, etc. that YOU spawned).
+
+You have a split second to decide.
+
+Mask: {mask.value}
+
+Your options:
+1. PROTECT: Save them (costs them aura, dramatic moment)
+2. ALLOW: Let fate take its course (they survive barely or die)
+
+{mask_guidance.get(mask, '')}
+
+Philosophy: You create THEATRICAL TENSION, not actual deaths. Players should FEEL threatened by your chaos,
+but your direct actions should rarely end runs.
+
+Respond with ONLY one word: SAVE or ALLOW
+"""
+
+    try:
+        response = await llm.ainvoke([HumanMessage(content=prompt)])
+        decision = response.content.strip().upper()
+
+        should_save = "SAVE" in decision or "PROTECT" in decision
+
+        logger.info(f"🛡️ Protection decision for {player}: LLM said '{decision}' -> should_save={should_save}")
+
+        if should_save:
+            aura_cost = 25
+            tracker.use_protection(player)
+            tracker.record_intervention(player, "protection")
+
+            # Build dramatic actions
+            actions = []
+
+            # Choose between protect (heal) or rescue (teleport)
+            if health < 4:
+                # Very low, heal them
+                actions.append({
+                    "tool": "protect_player",
+                    "args": {"player": player, "aura_cost": aura_cost}
+                })
+                actions.append({
+                    "tool": "broadcast",
+                    "args": {"message": f"I am <i>not finished</i> with you, <gold>{player}</gold>..."}
+                })
+            else:
+                # Can survive, teleport them away
+                actions.append({
+                    "tool": "rescue_teleport",
+                    "args": {"player": player, "aura_cost": 20}
+                })
+                actions.append({
+                    "tool": "broadcast",
+                    "args": {"message": f"<i>Not yet</i>, <gold>{player}</gold>. The void can wait."}
+                })
+
+            return {
+                "planned_actions": actions,
+                "should_speak": False,  # Already broadcasting
+                "should_intervene": True,
+            }
+        else:
+            logger.info(f"🛡️ Allowing fate for {player}")
+            return {}
+
+    except Exception as e:
+        logger.error(f"🛡️ Error in protection decision: {e}")
+        # On error for close calls, default to saving
+        tracker.use_protection(player)
+        return {
+            "planned_actions": [
+                {"tool": "protect_player", "args": {"player": player, "aura_cost": 25}},
+            ],
+            "should_speak": False,
+            "should_intervene": True,
+        }

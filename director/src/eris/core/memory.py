@@ -154,6 +154,25 @@ class ShortTermMemory:
                 player = data.get("player", "Unknown")
                 vehicle = data.get("vehicleType", "vehicle").replace("_", " ")
                 lines.append(f"🚗 {player} exited a {vehicle}")
+            # Protection system events
+            elif event_type == "eris_close_call":
+                player = data.get("player", "Unknown")
+                health = data.get("healthAfter", 0)
+                source = data.get("source", "unknown")
+                lines.append(f"⚠️ {player} nearly died to {source}! (health: {health}) [ERIS-CAUSED]")
+            elif event_type == "eris_caused_death":
+                player = data.get("player", "Unknown")
+                cause = data.get("cause", "unknown")
+                lines.append(f"💀 {player} KILLED by Eris intervention ({cause})!")
+            elif event_type == "eris_protection_used":
+                player = data.get("player", "Unknown")
+                aura_cost = data.get("auraCost", 0)
+                protection_type = data.get("protectionType", "protection")
+                lines.append(f"🛡️ Eris SAVED {player} with {protection_type} (-{aura_cost} aura)")
+            elif event_type == "eris_respawn_override":
+                player = data.get("player", "Unknown")
+                aura_cost = data.get("auraCost", 0)
+                lines.append(f"✨ DIVINE INTERVENTION: Eris respawned {player} (-{aura_cost} aura)")
 
         return "\n".join(lines[-30:])  # Last 30 events max
 

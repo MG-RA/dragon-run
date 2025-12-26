@@ -214,3 +214,42 @@ class FakeDeathArgs(BaseModel):
         "fell", "lava", "fire", "suffocated", "drowned", "exploded",
         "magic", "wither", "anvil", "lightning", "kinetic", "void"
     ] = Field(default="fell", description="Fake death cause")
+
+
+# ==================== DIVINE PROTECTION SCHEMAS ====================
+
+
+class ProtectPlayerArgs(BaseModel):
+    """Arguments for divine protection (heal + resistance)."""
+
+    player: str = Field(..., description="Player to protect (must be endangered by Eris)")
+    aura_cost: int = Field(
+        default=25,
+        ge=10,
+        le=100,
+        description="Aura cost for the saved player (10-100). Higher for more dangerous situations."
+    )
+
+
+class RescueTeleportArgs(BaseModel):
+    """Arguments for rescue teleport (move away from danger)."""
+
+    player: str = Field(..., description="Player to rescue (must be endangered by Eris)")
+    aura_cost: int = Field(
+        default=20,
+        ge=10,
+        le=50,
+        description="Aura cost for the teleported player (10-50)."
+    )
+
+
+class RespawnOverrideArgs(BaseModel):
+    """Arguments for respawn override (undo Eris-caused death)."""
+
+    player: str = Field(..., description="Player who died from Eris's actions")
+    aura_cost: int = Field(
+        default=50,
+        ge=25,
+        le=200,
+        description="Aura cost for the respawned player (25-200). Higher = more dramatic."
+    )
