@@ -35,6 +35,7 @@ class EventProcessor:
         "resource_milestone": 3.0,
         "mob_kills_batch": 0,  # Already batched on Java side
         "advancement_made": 2.0,
+        "eris_close_call": 10.0,  # Prevent spam from DOT effects (poison/wither)
     }
 
     def __init__(self, config: Optional[Dict[str, float]] = None):

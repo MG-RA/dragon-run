@@ -358,10 +358,131 @@ class TensionManager:
         return max(50, 100 - int(self.global_chaos * 0.5))
 
 
-# === Global Instance ===
+# === Fracture System (v1.3) ===
+# Fracture = global_chaos + total_karma + max_player_fear
+# Tracks overall system stress leading to phase transitions and apocalypse
+
+class FractureTracker:
+    """
+    Tracks fracture level and phase transitions.
+    Fracture is a composite metric: chaos + karma + max fear.
+    """
+
+    # Phase thresholds from spec
+    PHASE_THRESHOLDS = {
+        50: "rising",
+        80: "critical",
+        120: "locked",
+        150: "apocalypse",
+    }
+
+    def __init__(self, tension_manager: TensionManager):
+        self.tension_manager = tension_manager
+        self.total_karma: int = 0  # Sum of all karma across all players
+        self.apocalypse_triggered: bool = False
+        self._last_fracture: int = 0
+        self._last_phase: str = "normal"
+
+    def reset_for_new_run(self):
+        """Reset fracture state for a new run."""
+        self.total_karma = 0
+        self.apocalypse_triggered = False
+        self._last_fracture = 0
+        self._last_phase = "normal"
+        logger.info("FractureTracker reset for new run")
+
+    def update_total_karma(self, karma_sum: int):
+        """Update total karma from player_karmas state."""
+        self.total_karma = karma_sum
+
+    def calculate_fracture(self) -> int:
+        """
+        Calculate current fracture level.
+        fracture = global_chaos + total_karma + max_player_fear
+        """
+        global_chaos = self.tension_manager.get_global_chaos()
+        max_fear = max(self.tension_manager.player_fear.values()) if self.tension_manager.player_fear else 0
+
+        fracture = global_chaos + self.total_karma + max_fear
+        return fracture
+
+    def get_phase(self, fracture: Optional[int] = None) -> str:
+        """
+        Get current phase based on fracture level.
+
+        Returns: "normal", "rising", "critical", "locked", or "apocalypse"
+        """
+        if fracture is None:
+            fracture = self.calculate_fracture()
+
+        if fracture >= 150:
+            return "apocalypse"
+        elif fracture >= 120:
+            return "locked"
+        elif fracture >= 80:
+            return "critical"
+        elif fracture >= 50:
+            return "rising"
+        return "normal"
+
+    def check_phase_transition(self) -> Optional[str]:
+        """
+        Check if phase has changed since last check.
+        Returns new phase name if transition occurred, None otherwise.
+        """
+        current_fracture = self.calculate_fracture()
+        current_phase = self.get_phase(current_fracture)
+
+        if current_phase != self._last_phase:
+            old_phase = self._last_phase
+            self._last_phase = current_phase
+            self._last_fracture = current_fracture
+            logger.info(f"🔥 PHASE TRANSITION: {old_phase} → {current_phase} (fracture={current_fracture})")
+            return current_phase
+
+        self._last_fracture = current_fracture
+        return None
+
+    def should_trigger_apocalypse(self) -> bool:
+        """
+        Check if apocalypse should be triggered.
+        Returns True if fracture >= 200 and apocalypse not yet triggered.
+        """
+        if self.apocalypse_triggered:
+            return False
+
+        fracture = self.calculate_fracture()
+        return fracture >= 200
+
+    def mark_apocalypse_triggered(self):
+        """Mark apocalypse as triggered for this run."""
+        self.apocalypse_triggered = True
+        logger.warning("🍎 APOCALYPSE TRIGGERED - THE APPLE HAS FALLEN")
+
+    def get_state_for_graph(self) -> Dict:
+        """Get fracture state to merge into graph state."""
+        fracture = self.calculate_fracture()
+        return {
+            "fracture": fracture,
+            "phase": self.get_phase(fracture),
+            "apocalypse_triggered": self.apocalypse_triggered,
+        }
+
+    def get_analytics(self) -> Dict:
+        """Get fracture analytics for run end."""
+        return {
+            "final_fracture": self.calculate_fracture(),
+            "final_phase": self.get_phase(),
+            "apocalypse_triggered": self.apocalypse_triggered,
+            "total_karma": self.total_karma,
+        }
+
+
+# === Global Instances ===
 # Singleton pattern for easy access across the codebase
 
 _tension_manager: Optional[TensionManager] = None
+_fracture_tracker: Optional[FractureTracker] = None
 
 
 def get_tension_manager() -> TensionManager:
@@ -372,10 +493,25 @@ def get_tension_manager() -> TensionManager:
     return _tension_manager
 
 
+def get_fracture_tracker() -> FractureTracker:
+    """Get the global FractureTracker instance."""
+    global _fracture_tracker, _tension_manager
+    if _fracture_tracker is None:
+        if _tension_manager is None:
+            _tension_manager = TensionManager()
+        _fracture_tracker = FractureTracker(_tension_manager)
+    return _fracture_tracker
+
+
 def reset_tension_manager():
-    """Reset the global TensionManager for a new run."""
-    global _tension_manager
+    """Reset the global TensionManager and FractureTracker for a new run."""
+    global _tension_manager, _fracture_tracker
     if _tension_manager is not None:
         _tension_manager.reset_for_new_run()
     else:
         _tension_manager = TensionManager()
+
+    if _fracture_tracker is not None:
+        _fracture_tracker.reset_for_new_run()
+    else:
+        _fracture_tracker = FractureTracker(_tension_manager)

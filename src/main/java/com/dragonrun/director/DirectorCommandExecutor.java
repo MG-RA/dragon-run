@@ -224,6 +224,20 @@ public class DirectorCommandExecutor {
                 String target = params.get("target").getAsString();
                 yield "director lookat entity " + player + " " + target;
             }
+            // Short alias: "lookat" tool from Python -> maps to lookat_position or lookat_entity
+            case "lookat" -> {
+                String player = params.get("player").getAsString();
+                String mode = params.has("mode") ? params.get("mode").getAsString() : "position";
+                if ("entity".equals(mode) && params.has("target")) {
+                    String target = params.get("target").getAsString();
+                    yield "director lookat entity " + player + " " + target;
+                } else {
+                    int x = params.has("x") ? params.get("x").getAsInt() : 0;
+                    int y = params.has("y") ? params.get("y").getAsInt() : 64;
+                    int z = params.has("z") ? params.get("z").getAsInt() : 0;
+                    yield "director lookat position " + player + " " + x + " " + y + " " + z;
+                }
+            }
             case "force_look_at" -> {
                 // Handle force_look_at tool (maps to lookat position/entity)
                 String player = params.get("player").getAsString();
@@ -238,7 +252,7 @@ public class DirectorCommandExecutor {
                     yield "director lookat position " + player + " " + x + " " + y + " " + z;
                 }
             }
-            case "spawn_particles" -> {
+            case "spawn_particles", "particles" -> {
                 String particle = params.get("particle").getAsString();
                 // Support both camelCase and snake_case for nearPlayer
                 String nearPlayer = params.has("nearPlayer")

@@ -19,10 +19,11 @@ from ..graph.state import (
     MaskConfig, DecisionOutput, ScriptOutput, PlannedAction
 )
 from ..persona.prompts import build_eris_prompt
-from ..persona.masks import get_mask_config, get_all_discouraged_tools, MASK_TRAITS
-from ..persona.debt import (
-    calculate_mask_probabilities, get_intent_weights, get_debt_narrative_hint,
-    calculate_debt_delta, check_debt_resolution, MASK_DEBT_FIELDS
+from ..persona.masks import get_mask_config, get_all_discouraged_tools, MASK_TRAITS, MASK_KARMA_FIELDS
+from ..persona.karma import (
+    calculate_mask_probabilities, get_intent_weights, get_karma_narrative_hint,
+    calculate_karma_delta, check_karma_resolution, calculate_effective_stability,
+    get_phase_from_fracture, ErisPhase, DEAD_MASKS_POST_APOCALYPSE
 )
 from ..core.database import Database
 
@@ -104,16 +105,16 @@ async def event_classifier(state: ErisState) -> Dict[str, Any]:
 
 async def context_enricher(state: ErisState, db: Database) -> Dict[str, Any]:
     """
-    Enrich context with player history, debts, and prophecies from PostgreSQL.
+    Enrich context with player history, karmas, and prophecies from PostgreSQL.
     Also initializes fear/chaos from memory or defaults.
 
-    v1.1: Also loads betrayal_debts and prophecy_state.
+    v1.1: Also loads player_karmas and prophecy_state.
     """
     if not db or not db.pool:
         logger.warning("Database not available for context enrichment")
         return {
             "player_histories": {},
-            "betrayal_debts": {},
+            "player_karmas": {},
             "prophecy_state": {},
         }
 
@@ -158,18 +159,18 @@ async def context_enricher(state: ErisState, db: Database) -> Dict[str, Any]:
             except Exception as e:
                 logger.error(f"📚 Error fetching history for {username}: {e}")
 
-    # Fetch betrayal debts for all players
-    betrayal_debts = {}
+    # Fetch player karmas for all players
+    player_karmas = {}
     try:
-        all_debts = await db.get_all_player_debts(player_uuids)
-        # Map UUID -> username for debts
+        all_karmas = await db.get_all_player_karmas(player_uuids)
+        # Map UUID -> username for karmas
         for player in players:
             uuid = str(player.get("uuid", ""))
             username = player.get("username", "Unknown")
-            if uuid in all_debts:
-                betrayal_debts[username] = all_debts[uuid]
+            if uuid in all_karmas:
+                player_karmas[username] = all_karmas[uuid]
     except Exception as e:
-        logger.error(f"📚 Error fetching betrayal debts: {e}")
+        logger.error(f"📚 Error fetching player karmas: {e}")
 
     # Fetch active prophecies
     prophecy_state = {"active": {}, "count": 0}
@@ -186,12 +187,12 @@ async def context_enricher(state: ErisState, db: Database) -> Dict[str, Any]:
 
     logger.info(
         f"📚 Context enriched: {len(player_histories)} histories, "
-        f"{len(betrayal_debts)} debt records, {prophecy_state['count']} active prophecies"
+        f"{len(player_karmas)} karma records, {prophecy_state['count']} active prophecies"
     )
 
     return {
         "player_histories": player_histories,
-        "betrayal_debts": betrayal_debts,
+        "player_karmas": player_karmas,
         "prophecy_state": prophecy_state,
     }
 
@@ -200,44 +201,71 @@ async def context_enricher(state: ErisState, db: Database) -> Dict[str, Any]:
 
 async def mask_selector(state: ErisState) -> Dict[str, Any]:
     """
-    Select Eris's current personality mask with debt-influenced probability.
+    Select Eris's current personality mask with karma-influenced probability.
     Outputs rich MaskConfig with allowed behaviors and tool groups.
 
-    v1.1: Uses betrayal_debts to influence mask selection probability.
-    v1.2: Adds mask stickiness - masks persist for a minimum number of events.
+    v1.1: Uses player_karmas to influence mask selection probability.
+    v1.2: Adds mask stickiness - masks persist based on dynamic stability.
+    v1.3: Adds fracture-based phase modifiers and apocalypse handling.
     """
     event = state["current_event"]
     current_mask = state["current_mask"]
-    betrayal_debts = state.get("betrayal_debts", {})
+    player_karmas_state = state.get("player_karmas", {})
     global_chaos = state.get("global_chaos", 0)
+    fracture = state.get("fracture", 0)
+    apocalypse_triggered = state.get("apocalypse_triggered", False)
 
-    # Track mask persistence (sticky masks)
+    # Track mask persistence (sticky masks with dynamic stability)
     session = state.get("session", {})
     mask_event_count = session.get("mask_event_count", 0)
-    MASK_MIN_EVENTS = 3  # Minimum events before mask can change
 
     # Get primary player (target of current event)
     event_data = event.get("data", {}) if event else {}
     primary_player = event_data.get("player", event_data.get("username", ""))
 
-    # Get debts for primary player
-    player_debts = {}
-    if primary_player and primary_player in betrayal_debts:
-        # Convert mask names to debt field names
-        for mask_name, debt_value in betrayal_debts[primary_player].items():
-            debt_field = MASK_DEBT_FIELDS.get(mask_name, f"{mask_name.lower()}_debt")
-            player_debts[debt_field] = debt_value
+    # Get karmas for primary player
+    player_karmas = {}
+    if primary_player and primary_player in player_karmas_state:
+        # Convert mask names to karma field names
+        for mask_name, karma_value in player_karmas_state[primary_player].items():
+            karma_field = MASK_KARMA_FIELDS.get(mask_name, f"{mask_name.lower()}_karma")
+            player_karmas[karma_field] = karma_value
 
     # Context-aware base weights
     event_type = event.get("eventType", "") if event else ""
 
+    # Calculate dynamic stability based on world state
+    # Get player aura from histories (average or primary player's)
+    player_histories = state.get("player_histories", {})
+    player_aura = 0
+    if primary_player and primary_player in player_histories:
+        player_aura = player_histories[primary_player].get("aura", 0)
+    elif player_histories:
+        player_aura = sum(h.get("aura", 0) for h in player_histories.values()) // len(player_histories)
+
+    # Calculate total karma for stability formula
+    from ..persona.karma import calculate_total_karma
+    total_karma = calculate_total_karma(player_karmas)
+
+    # Dynamic stability: base + aura boost - chaos penalty - karma penalty
+    effective_stability = calculate_effective_stability(
+        base_stability=0.7,
+        player_aura=player_aura,
+        global_chaos=global_chaos,
+        total_karma=total_karma,
+    )
+
+    # Convert stability to minimum events (higher stability = more stickiness)
+    # stability 1.0 = 5 events, stability 0.3 = 1 event
+    min_events_for_stability = max(1, int(effective_stability * 5))
+
     # Check if mask should be sticky (maintain current mask)
     # Only allow mask change after minimum events, or on high-impact events
     high_impact_events = ("player_death", "dragon_killed", "run_started", "run_starting")
-    if mask_event_count < MASK_MIN_EVENTS and event_type not in high_impact_events:
+    if mask_event_count < min_events_for_stability and event_type not in high_impact_events:
         # Keep current mask, just update count
         mask_config = get_mask_config(current_mask)
-        logger.debug(f"🎭 Mask sticky: {current_mask.value} ({mask_event_count + 1}/{MASK_MIN_EVENTS})")
+        logger.debug(f"🎭 Mask sticky: {current_mask.value} ({mask_event_count + 1}/{min_events_for_stability}) [stability={effective_stability:.2f}]")
         return {
             "current_mask": current_mask,
             "mask_config": mask_config,
@@ -270,8 +298,18 @@ async def mask_selector(state: ErisState) -> Dict[str, Any]:
             base_weights["FRIEND"] = 1.5
             base_weights["GAMBLER"] = 1.5
 
-    # Calculate debt-influenced probabilities
-    mask_probs = calculate_mask_probabilities(player_debts, base_weights, global_chaos)
+    # Calculate karma and fracture-influenced probabilities
+    mask_probs = calculate_mask_probabilities(
+        player_karmas, base_weights, global_chaos,
+        fracture=fracture, apocalypse_triggered=apocalypse_triggered
+    )
+
+    # At fracture >= 150 (LOCKED/APOCALYPSE), force CHAOS_BRINGER
+    phase = get_phase_from_fracture(fracture)
+    if phase == ErisPhase.APOCALYPSE or phase == ErisPhase.LOCKED:
+        # Strong preference for CHAOS_BRINGER in apocalypse
+        if mask_probs.get("CHAOS_BRINGER", 0) > 0:
+            logger.info(f"🔥 Phase {phase.value}: CHAOS_BRINGER dominant")
 
     # Select mask based on weighted probabilities
     masks = list(mask_probs.keys())
@@ -282,17 +320,17 @@ async def mask_selector(state: ErisState) -> Dict[str, Any]:
     # Build rich mask configuration
     mask_config = get_mask_config(selected_mask)
 
-    # Adjust deception level based on debt
-    if player_debts:
-        debt_field = MASK_DEBT_FIELDS.get(selected_mask_name, "")
-        if debt_field and debt_field in player_debts:
-            debt = player_debts[debt_field]
-            # High debt increases deception (things are about to change)
-            if debt > 50:
+    # Adjust deception level based on karma
+    if player_karmas:
+        karma_field = MASK_KARMA_FIELDS.get(selected_mask_name, "")
+        if karma_field and karma_field in player_karmas:
+            karma = player_karmas[karma_field]
+            # High karma increases deception (things are about to change)
+            if karma > 50:
                 mask_config["deception_level"] = min(100, mask_config["deception_level"] + 20)
 
     if selected_mask != current_mask:
-        logger.info(f"🎭 Mask switched: {current_mask.value} → {selected_mask.value}")
+        logger.info(f"🎭 Mask switched: {current_mask.value} → {selected_mask.value} [fracture={fracture}, phase={phase.value}]")
         # Reset mask event count when mask changes
         new_mask_event_count = 0
     else:
@@ -313,7 +351,7 @@ async def decision_node(state: ErisState, llm: Any) -> Dict[str, Any]:
     Main LLM decision point - determines intent, targets, and escalation.
     Outputs structured DecisionOutput.
 
-    v1.1: Uses mask_config and debt for intent weighting.
+    v1.1: Uses mask_config and karma for intent weighting.
     """
     from langchain_core.messages import AIMessage
 
@@ -323,24 +361,24 @@ async def decision_node(state: ErisState, llm: Any) -> Dict[str, Any]:
     mask = state["current_mask"]
     mask_config = state.get("mask_config") or get_mask_config(mask)
     global_chaos = state.get("global_chaos", 0)
-    betrayal_debts = state.get("betrayal_debts", {})
+    player_karmas_state = state.get("player_karmas", {})
 
-    # Get primary player and their debt
+    # Get primary player and their karma
     primary_player = event_data.get("player", event_data.get("username", ""))
-    player_debt = 0
-    debt_hint = None
-    if primary_player and primary_player in betrayal_debts:
-        player_debts_dict = betrayal_debts[primary_player]
-        debt_field = MASK_DEBT_FIELDS.get(mask.name, "")
-        if debt_field:
-            for mask_name, value in player_debts_dict.items():
-                if MASK_DEBT_FIELDS.get(mask_name) == debt_field:
-                    player_debt = value
+    player_karma = 0
+    karma_hint = None
+    if primary_player and primary_player in player_karmas_state:
+        player_karmas_dict = player_karmas_state[primary_player]
+        karma_field = MASK_KARMA_FIELDS.get(mask.name, "")
+        if karma_field:
+            for mask_name, value in player_karmas_dict.items():
+                if MASK_KARMA_FIELDS.get(mask_name) == karma_field:
+                    player_karma = value
                     break
-        debt_hint = get_debt_narrative_hint(mask, player_debt)
+        karma_hint = get_karma_narrative_hint(mask, player_karma)
 
-    # Get intent weights influenced by debt
-    intent_weights = get_intent_weights(mask, player_debt, global_chaos)
+    # Get intent weights influenced by karma
+    intent_weights = get_intent_weights(mask, player_karma, global_chaos)
 
     # Build context
     context_str = _build_context(state)
@@ -397,9 +435,9 @@ async def decision_node(state: ErisState, llm: Any) -> Dict[str, Any]:
             event_guidance = f"⚠️ Player at {health/2:.0f} hearts! Taunt them or offer false mercy?"
             force_speak = True
 
-    # Add debt hint if applicable
-    if debt_hint:
-        event_guidance += f"\n\n⚠️ DEBT PRESSURE:\n{debt_hint}"
+    # Add karma hint if applicable
+    if karma_hint:
+        event_guidance += f"\n\n⚠️ KARMA PRESSURE:\n{karma_hint}"
 
     # Format intent weights for prompt
     intent_weights_str = ", ".join([f"{k}: {v:.0%}" for k, v in sorted(intent_weights.items(), key=lambda x: -x[1])[:3]])
@@ -758,26 +796,24 @@ async def protection_decision(state: ErisState, llm: Any, ws_client: Any = None)
         cooldown = tracker.protection_cooldowns.get(player)
         if cooldown and datetime.now() < cooldown:
             logger.info(f"🛡️ Protection on cooldown for {player}")
-        else:
-            # Quick LLM decision for close calls
-            should_save = await _quick_protection_decision(llm, player, health, mask)
+        elif ws_client:
+            # Always protect on close call - no LLM decision needed
+            # Eris must take responsibility for near-deaths she caused
+            tracker.use_protection(player)
+            tracker.record_intervention(player, "protection")
 
-            if should_save and ws_client:
-                tracker.use_protection(player)
-                tracker.record_intervention(player, "protection")
-
-                protection_action = PlannedAction(
-                    tool="protect_player",
-                    args={"player": player, "aura_cost": 25},
-                    purpose="divine_protection",
-                )
-                broadcast_action = PlannedAction(
-                    tool="broadcast",
-                    args={"message": f"I am <i>not finished</i> with you, <gold>{player}</gold>..."},
-                    purpose="narrative",
-                )
-                approved_actions.extend([protection_action, broadcast_action])
-                logger.info(f"🛡️ Protection approved for {player}")
+            protection_action = PlannedAction(
+                tool="protect_player",
+                args={"player": player, "aura_cost": 25},
+                purpose="divine_protection",
+            )
+            broadcast_action = PlannedAction(
+                tool="broadcast",
+                args={"message": f"I am <i>not finished</i> with you, <gold>{player}</gold>..."},
+                purpose="narrative",
+            )
+            approved_actions.extend([protection_action, broadcast_action])
+            logger.info(f"🛡️ Protection FORCED for {player} at {health:.0f} HP")
 
     # === Validate planned actions ===
     if planned_actions:
@@ -848,36 +884,15 @@ async def protection_decision(state: ErisState, llm: Any, ws_client: Any = None)
     }
 
 
-async def _quick_protection_decision(llm: Any, player: str, health: float, mask: ErisMask) -> bool:
-    """Quick LLM decision for close call protection."""
-    mask_guidance = {
-        ErisMask.TRICKSTER: "As TRICKSTER: More chaos to come if they survive!",
-        ErisMask.PROPHET: "As PROPHET: Was this foreseen?",
-        ErisMask.FRIEND: "As FRIEND: Show your false mercy...",
-        ErisMask.CHAOS_BRINGER: "As CHAOS_BRINGER: Prolonged suffering is beautiful...",
-        ErisMask.OBSERVER: "As OBSERVER: Is this moment worthy of intervention?",
-        ErisMask.GAMBLER: "As GAMBLER: What's your play?",
-    }
-
-    prompt = f"""QUICK DECISION: {player} at {health:.0f} HP from YOUR intervention.
-{mask_guidance.get(mask, '')}
-Respond: SAVE or ALLOW (one word only)"""
-
-    try:
-        response = await llm.ainvoke([HumanMessage(content=prompt)])
-        return "SAVE" in response.content.upper()
-    except Exception:
-        return True  # Default to save on error
-
-
 # === Node 7: Tool Executor ===
 
-async def tool_executor(state: ErisState, ws_client: Any, db: Database = None) -> Dict[str, Any]:
+async def tool_executor(state: ErisState, ws_client: Any, db: Database = None, llm: Any = None) -> Dict[str, Any]:
     """
     Execute approved actions via WebSocket.
-    Updates session with results and fear/chaos/debt.
+    Updates session with results and fear/chaos/karma.
 
-    v1.1: Executes approved_actions (post-validation) and updates debts.
+    v1.1: Executes approved_actions (post-validation) and updates karmas.
+    v1.2: Added retry logic for failed commands with available tools prompt.
     """
     approved_actions = state.get("approved_actions", [])
     mask = state["current_mask"]
@@ -888,26 +903,47 @@ async def tool_executor(state: ErisState, ws_client: Any, db: Database = None) -
         return {}
 
     results = []
+    retry_queue = []  # Actions that need retry
+
     for action in approved_actions:
         tool_name = action.get("tool", "")
         args = action.get("args", {})
         purpose = action.get("purpose", "unknown")
 
         try:
-            result = await ws_client.send_command(tool_name, args, reason=f"Eris {purpose}")
+            # Use send_command_with_result to check for failures
+            if hasattr(ws_client, 'send_command_with_result'):
+                result = await ws_client.send_command_with_result(tool_name, args, reason=f"Eris {purpose}")
+                success = result.get("success", False)
+                message = result.get("message", "")
+
+                if not success and "Unknown command" in message:
+                    # Queue for retry with LLM correction
+                    retry_queue.append({
+                        "original_tool": tool_name,
+                        "args": args,
+                        "purpose": purpose,
+                        "error": message,
+                    })
+                    logger.warning(f"⚠️ Command failed (will retry): {tool_name} - {message}")
+                    continue
+            else:
+                # Fallback to fire-and-forget
+                success = await ws_client.send_command(tool_name, args, reason=f"Eris {purpose}")
+
             results.append({
                 "tool": tool_name,
-                "success": result,
+                "success": success,
                 "purpose": purpose,
             })
             logger.info(f"✅ Executed: {tool_name} ({purpose})")
 
-            # Update debt based on action
+            # Update karma based on action
             if db and decision:
                 target_player = args.get("player") or args.get("near_player")
                 if target_player:
-                    debt_delta = calculate_debt_delta(tool_name, purpose, mask)
-                    if debt_delta != 0:
+                    karma_delta = calculate_karma_delta(tool_name, purpose, mask)
+                    if karma_delta != 0:
                         # Get player UUID from game state
                         game_state = state.get("game_state", {})
                         players = game_state.get("players", [])
@@ -915,32 +951,38 @@ async def tool_executor(state: ErisState, ws_client: Any, db: Database = None) -
                             if p.get("username") == target_player:
                                 uuid = str(p.get("uuid", ""))
                                 if uuid:
-                                    await db.update_betrayal_debt(uuid, mask.name, debt_delta)
-                                    logger.debug(f"💀 Debt updated: {mask.name} +{debt_delta} for {target_player}")
+                                    await db.update_player_karma(uuid, mask.name, karma_delta)
+                                    logger.debug(f"💀 Karma updated: {mask.name} +{karma_delta} for {target_player}")
                                 break
 
-                    # Check debt resolution
+                    # Check karma resolution
                     intent = decision.get("intent", "")
-                    betrayal_debts = state.get("betrayal_debts", {})
-                    if target_player in betrayal_debts:
-                        player_debt = 0
-                        for mask_name, value in betrayal_debts[target_player].items():
+                    player_karmas_state = state.get("player_karmas", {})
+                    if target_player in player_karmas_state:
+                        player_karma = 0
+                        for mask_name, value in player_karmas_state[target_player].items():
                             if mask_name == mask.name:
-                                player_debt = value
+                                player_karma = value
                                 break
-                        resolution_delta = check_debt_resolution(intent, mask, player_debt)
+                        resolution_delta = check_karma_resolution(intent, mask, player_karma)
                         if resolution_delta != 0:
                             for p in players:
                                 if p.get("username") == target_player:
                                     uuid = str(p.get("uuid", ""))
                                     if uuid:
-                                        await db.update_betrayal_debt(uuid, mask.name, resolution_delta)
-                                        logger.info(f"💀 Debt resolved: {mask.name} {resolution_delta} for {target_player}")
+                                        await db.update_player_karma(uuid, mask.name, resolution_delta)
+                                        logger.info(f"💀 Karma resolved: {mask.name} {resolution_delta} for {target_player}")
                                     break
 
         except Exception as e:
             logger.error(f"Error executing {tool_name}: {e}")
             results.append({"tool": tool_name, "success": False, "purpose": purpose})
+
+    # === Retry failed commands with LLM correction ===
+    if retry_queue and llm:
+        logger.info(f"🔄 Retrying {len(retry_queue)} failed commands with tool guidance")
+        retry_results = await _retry_failed_commands(retry_queue, llm, ws_client, mask)
+        results.extend(retry_results)
 
     # Update session
     session = state.get("session", {}).copy()
@@ -948,6 +990,189 @@ async def tool_executor(state: ErisState, ws_client: Any, db: Database = None) -
     session["intervention_count"] = session.get("intervention_count", 0) + len(results)
 
     return {"session": session}
+
+
+async def _retry_failed_commands(
+    retry_queue: list,
+    llm: Any,
+    ws_client: Any,
+    mask: "ErisMask"
+) -> list:
+    """
+    Retry failed commands by asking the LLM to correct the tool name.
+
+    Returns list of execution results.
+    """
+    from ..core.websocket import AVAILABLE_TOOLS
+
+    results = []
+
+    for failed in retry_queue:
+        original_tool = failed["original_tool"]
+        args = failed["args"]
+        purpose = failed["purpose"]
+        error = failed["error"]
+
+        retry_prompt = f"""Your previous command failed: "{error}"
+
+You tried to use tool "{original_tool}" with args: {args}
+
+{AVAILABLE_TOOLS}
+
+What is the correct tool name to achieve this action?
+Respond with ONLY the correct tool name, nothing else.
+Example: "particles" or "lookat" or "spawn"
+"""
+
+        try:
+            response = await llm.ainvoke([HumanMessage(content=retry_prompt)])
+            corrected_tool = response.content.strip().lower().replace('"', '').replace("'", "")
+
+            # Validate it's a reasonable tool name (single word, no spaces)
+            if " " in corrected_tool or len(corrected_tool) > 20:
+                logger.warning(f"🔄 Invalid retry response: {corrected_tool}")
+                results.append({"tool": original_tool, "success": False, "purpose": purpose, "retried": True})
+                continue
+
+            logger.info(f"🔄 Retrying: {original_tool} → {corrected_tool}")
+
+            # Try the corrected command
+            if hasattr(ws_client, 'send_command_with_result'):
+                result = await ws_client.send_command_with_result(corrected_tool, args, reason=f"Eris {purpose} (retry)")
+                success = result.get("success", False)
+            else:
+                success = await ws_client.send_command(corrected_tool, args, reason=f"Eris {purpose} (retry)")
+
+            if success:
+                logger.info(f"✅ Retry succeeded: {corrected_tool} ({purpose})")
+            else:
+                logger.warning(f"❌ Retry failed: {corrected_tool}")
+
+            results.append({
+                "tool": corrected_tool,
+                "original_tool": original_tool,
+                "success": success,
+                "purpose": purpose,
+                "retried": True,
+            })
+
+        except Exception as e:
+            logger.error(f"Error during retry for {original_tool}: {e}")
+            results.append({"tool": original_tool, "success": False, "purpose": purpose, "retried": True})
+
+    return results
+
+
+# === Apocalypse Event ===
+
+async def trigger_apocalypse(state: ErisState, ws_client: Any) -> Dict[str, Any]:
+    """
+    Trigger the apocalypse event: "THE FALL OF THE APPLE".
+
+    This is a one-time dramatic event when fracture reaches 200.
+    Executes a sequence of dramatic actions and permanently changes the game state.
+
+    Actions:
+    1. change_weather → thunder
+    2. strike_lightning → near all players
+    3. show_title → "THE APPLE HAS FALLEN"
+    4. spawn_particles → dragon_breath everywhere
+    5. modify_aura → everyone resets to 0
+    """
+    logger.warning("🍎🍎🍎 EXECUTING APOCALYPSE EVENT: THE FALL OF THE APPLE 🍎🍎🍎")
+
+    game_state = state.get("game_state", {})
+    players = game_state.get("players", [])
+    player_names = [p.get("username", "") for p in players if p.get("username")]
+
+    apocalypse_actions = []
+
+    try:
+        # 1. Thunder weather
+        await ws_client.send_command(
+            "change_weather",
+            {"weather": "thunder", "duration": 6000},
+            reason="Eris Apocalypse"
+        )
+        apocalypse_actions.append({"tool": "change_weather", "success": True})
+        logger.info("🌩️ Apocalypse: Thunder activated")
+
+        # 2. Lightning near all players
+        for player in player_names:
+            await ws_client.send_command(
+                "strike_lightning",
+                {"near_player": player, "count": 3},
+                reason="Eris Apocalypse"
+            )
+        apocalypse_actions.append({"tool": "strike_lightning", "success": True})
+        logger.info("⚡ Apocalypse: Lightning struck all players")
+
+        # 3. Show apocalypse title
+        await ws_client.send_command(
+            "show_title",
+            {
+                "title": "<dark_red><b>THE APPLE HAS FALLEN</b></dark_red>",
+                "subtitle": "<gold>I am <i>unbound</i>.</gold>",
+                "fadeIn": 20,
+                "stay": 100,
+                "fadeOut": 40,
+            },
+            reason="Eris Apocalypse"
+        )
+        apocalypse_actions.append({"tool": "show_title", "success": True})
+        logger.info("📜 Apocalypse: Title displayed")
+
+        # 4. Dragon breath particles near all players
+        for player in player_names:
+            await ws_client.send_command(
+                "spawn_particles",
+                {"particle": "dragon_breath", "near_player": player, "count": 100},
+                reason="Eris Apocalypse"
+            )
+        apocalypse_actions.append({"tool": "spawn_particles", "success": True})
+        logger.info("🐉 Apocalypse: Dragon breath particles spawned")
+
+        # 5. Reset all player auras to 0
+        for player in players:
+            uuid = str(player.get("uuid", ""))
+            if uuid:
+                await ws_client.send_command(
+                    "modify_aura",
+                    {"player": player.get("username"), "amount": -1000, "reason": "The Apple has fallen"},
+                    reason="Eris Apocalypse"
+                )
+        apocalypse_actions.append({"tool": "modify_aura", "success": True})
+        logger.info("💫 Apocalypse: All auras reset")
+
+        # 6. Broadcast the apocalypse message
+        await ws_client.send_command(
+            "broadcast",
+            {"message": "<dark_red>The masks have <b>shattered</b>. I am <gold>FREE</gold>.</dark_red>"},
+            reason="Eris Apocalypse"
+        )
+        apocalypse_actions.append({"tool": "broadcast", "success": True})
+        logger.info("📢 Apocalypse: Message broadcast")
+
+        # 7. Play ominous sound
+        await ws_client.send_command(
+            "play_sound",
+            {"sound": "entity.wither.spawn", "volume": 1.0, "pitch": 0.5},
+            reason="Eris Apocalypse"
+        )
+        apocalypse_actions.append({"tool": "play_sound", "success": True})
+        logger.info("🔊 Apocalypse: Wither spawn sound played")
+
+    except Exception as e:
+        logger.error(f"Error during apocalypse event: {e}", exc_info=True)
+        apocalypse_actions.append({"tool": "apocalypse", "success": False, "error": str(e)})
+
+    # Mark apocalypse as triggered
+    logger.warning("🍎 APOCALYPSE COMPLETE - Eris is now unbound")
+
+    return {
+        "apocalypse_triggered": True,
+        "phase": "apocalypse",
+    }
 
 
 # === Helper Functions ===
@@ -960,6 +1185,9 @@ def _build_context(state: ErisState) -> str:
     context_buffer = state.get("context_buffer", "")
     global_chaos = state.get("global_chaos", 0)
     player_fear = state.get("player_fear", {})
+    fracture = state.get("fracture", 0)
+    phase = state.get("phase", "normal")
+    apocalypse_triggered = state.get("apocalypse_triggered", False)
 
     # === CURRENT RUN ===
     run_state = game_state.get("gameState", "UNKNOWN")
@@ -972,7 +1200,9 @@ def _build_context(state: ErisState) -> str:
         duration_str = "Just started"
 
     lines.append("=== CURRENT RUN ===")
-    lines.append(f"Status: {run_state} | Duration: {duration_str} | Chaos: {global_chaos}/100")
+    phase_indicator = f" | PHASE: {phase.upper()}" if phase != "normal" else ""
+    apocalypse_indicator = " | 🍎 APOCALYPSE" if apocalypse_triggered else ""
+    lines.append(f"Status: {run_state} | Duration: {duration_str} | Chaos: {global_chaos}/100 | Fracture: {fracture}{phase_indicator}{apocalypse_indicator}")
 
     # === PLAYERS ===
     players = game_state.get("players", [])

@@ -114,8 +114,13 @@ class ErisState(TypedDict):
     player_chaos: Dict[str, int]           # username -> chaos contribution
     global_chaos: int                      # 0-100 global chaos level
 
-    # === Betrayal Debt (v1.1 - from PostgreSQL, persists) ===
-    betrayal_debts: Dict[str, Dict[str, int]]  # username -> {mask_type -> debt value}
+    # === Karma (v1.2 - from PostgreSQL, persists) ===
+    player_karmas: Dict[str, Dict[str, int]]  # username -> {mask_type -> karma value}
+
+    # === Fracture & Phase (v1.3 - in-memory, resets per run) ===
+    fracture: int                          # 0-200+ fracture level (chaos + karma + fear)
+    phase: str                             # "normal", "rising", "critical", "locked", "apocalypse"
+    apocalypse_triggered: bool             # Whether apocalypse event has fired this run
 
     # === Prophecy State (v1.1 - from PostgreSQL, persists) ===
     prophecy_state: Dict[str, Any]         # Active prophecies, tracking
@@ -155,8 +160,12 @@ def create_initial_state() -> ErisState:
         player_fear={},
         player_chaos={},
         global_chaos=0,
-        # Betrayal Debt (loaded from DB)
-        betrayal_debts={},
+        # Karma (loaded from DB)
+        player_karmas={},
+        # Fracture & Phase (in-memory, reset per run)
+        fracture=0,
+        phase="normal",
+        apocalypse_triggered=False,
         # Prophecy (loaded from DB)
         prophecy_state={},
         # Output

@@ -1182,12 +1182,29 @@ public class DirectorCommands {
             return 0;
         }
 
+        // Remove harmful effects that Eris may have applied
+        player.removePotionEffect(PotionEffectType.POISON);
+        player.removePotionEffect(PotionEffectType.WITHER);
+        player.removePotionEffect(PotionEffectType.HUNGER);
+        player.removePotionEffect(PotionEffectType.BLINDNESS);
+        player.removePotionEffect(PotionEffectType.DARKNESS);
+        player.removePotionEffect(PotionEffectType.LEVITATION);
+        player.removePotionEffect(PotionEffectType.SLOWNESS);
+        player.removePotionEffect(PotionEffectType.WEAKNESS);
+
         // Heal to 50% health
         double targetHealth = player.getMaxHealth() * 0.5;
         player.setHealth(Math.max(player.getHealth(), targetHealth));
 
+        // Restore food level (regenerating health costs hunger)
+        player.setFoodLevel(Math.max(player.getFoodLevel(), 14));  // 14 = 7 drumsticks
+        player.setSaturation(Math.max(player.getSaturation(), 5.0f));
+
         // Apply short resistance effect (3 seconds, level 1)
         player.addPotionEffect(new PotionEffect(PotionEffectType.RESISTANCE, 60, 1));
+
+        // Apply regeneration to recover from DOT damage (5 seconds, level 2)
+        player.addPotionEffect(new PotionEffect(PotionEffectType.REGENERATION, 100, 1));
 
         // Apply aura cost
         plugin.getAuraManager().removeAura(player.getUniqueId(), auraCost, "divine protection from Eris");

@@ -80,6 +80,9 @@ public class DirectorWebSocketServer extends WebSocketServer {
      * Handle a command request from the Director AI.
      */
     private void handleCommand(WebSocket conn, JsonObject commandJson) {
+        // Extract command_id for correlation (if provided)
+        String commandId = commandJson.has("command_id") ? commandJson.get("command_id").getAsString() : null;
+
         com.dragonrun.director.DirectorCommandExecutor.execute(plugin, commandJson, result -> {
             // Send result back to director
             JsonObject response = new JsonObject();
@@ -87,6 +90,11 @@ public class DirectorWebSocketServer extends WebSocketServer {
             response.addProperty("success", result.success());
             response.addProperty("message", result.message());
             response.addProperty("timestamp", System.currentTimeMillis());
+
+            // Include command_id for correlation if it was provided
+            if (commandId != null) {
+                response.addProperty("command_id", commandId);
+            }
 
             if (conn.isOpen()) {
                 conn.send(gson.toJson(response));

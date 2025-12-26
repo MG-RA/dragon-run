@@ -110,16 +110,16 @@ MASK_TOOL_GROUPS: Dict[str, Dict[str, List[str]]] = {
 }
 
 
-# === Mask Debt Fields ===
-# Maps each mask to its debt type for betrayal system
+# === Mask Karma Fields ===
+# Maps each mask to its karma type for the karma vector system
 
-MASK_DEBT_FIELDS: Dict[str, str] = {
-    "TRICKSTER": "prank_debt",
-    "PROPHET": "doom_debt",
-    "FRIEND": "betrayal_debt",
-    "CHAOS_BRINGER": "wrath_debt",
-    "OBSERVER": "silence_debt",
-    "GAMBLER": "risk_debt",
+MASK_KARMA_FIELDS: Dict[str, str] = {
+    "TRICKSTER": "prank_karma",
+    "PROPHET": "doom_karma",
+    "FRIEND": "betrayal_karma",
+    "CHAOS_BRINGER": "wrath_karma",
+    "OBSERVER": "silence_karma",
+    "GAMBLER": "risk_karma",
 }
 
 
@@ -252,6 +252,6 @@ def get_all_discouraged_tools(mask: ErisMask) -> List[str]:
     return list(set(tools))  # Deduplicate
 
 
-def get_debt_field_for_mask(mask: ErisMask) -> str:
-    """Get the debt field name for a mask."""
-    return MASK_DEBT_FIELDS.get(mask.name, "generic_debt")
+def get_karma_field_for_mask(mask: ErisMask) -> str:
+    """Get the karma field name for a mask."""
+    return MASK_KARMA_FIELDS.get(mask.name, "generic_karma")

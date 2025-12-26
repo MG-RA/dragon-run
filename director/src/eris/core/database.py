@@ -219,10 +219,11 @@ class Database:
             logger.error(f"Error fetching recent achievements: {e}")
             return []
 
-    # === Betrayal Debt Methods (v1.1) ===
+    # === Karma Methods (v1.3 - renamed from betrayal debt) ===
+    # Note: Database table is still eris_betrayal_debt for backwards compatibility
 
-    async def get_betrayal_debts(self, uuid: str) -> Dict[str, int]:
-        """Get all betrayal debts for a player, keyed by mask type."""
+    async def get_player_karma(self, uuid: str) -> Dict[str, int]:
+        """Get all karma values for a player, keyed by mask type."""
         if not self.pool:
             return {}
 
@@ -236,14 +237,14 @@ class Database:
                 rows = await conn.fetch(query, uuid)
                 return {row["mask_type"]: row["debt_value"] for row in rows}
         except Exception as e:
-            logger.error(f"Error fetching betrayal debts: {e}")
+            logger.error(f"Error fetching player karma: {e}")
             return {}
 
-    async def update_betrayal_debt(self, uuid: str, mask_type: str, delta: int) -> int:
+    async def update_player_karma(self, uuid: str, mask_type: str, delta: int) -> int:
         """
-        Update betrayal debt for a player/mask combination.
+        Update karma for a player/mask combination.
 
-        Returns the new debt value.
+        Returns the new karma value.
         """
         if not self.pool:
             return 0
@@ -263,11 +264,11 @@ class Database:
                 row = await conn.fetchrow(query, uuid, mask_type, delta)
                 return row["debt_value"] if row else 0
         except Exception as e:
-            logger.error(f"Error updating betrayal debt: {e}")
+            logger.error(f"Error updating player karma: {e}")
             return 0
 
-    async def get_all_player_debts(self, uuids: list) -> Dict[str, Dict[str, int]]:
-        """Get betrayal debts for multiple players at once."""
+    async def get_all_player_karmas(self, uuids: list) -> Dict[str, Dict[str, int]]:
+        """Get karma values for multiple players at once."""
         if not self.pool or not uuids:
             return {}
 
@@ -287,8 +288,21 @@ class Database:
                     result[player_uuid][row["mask_type"]] = row["debt_value"]
                 return result
         except Exception as e:
-            logger.error(f"Error fetching all player debts: {e}")
+            logger.error(f"Error fetching all player karmas: {e}")
             return {}
+
+    # Backwards compatibility aliases
+    async def get_betrayal_debts(self, uuid: str) -> Dict[str, int]:
+        """Alias for get_player_karma (backwards compatibility)."""
+        return await self.get_player_karma(uuid)
+
+    async def update_betrayal_debt(self, uuid: str, mask_type: str, delta: int) -> int:
+        """Alias for update_player_karma (backwards compatibility)."""
+        return await self.update_player_karma(uuid, mask_type, delta)
+
+    async def get_all_player_debts(self, uuids: list) -> Dict[str, Dict[str, int]]:
+        """Alias for get_all_player_karmas (backwards compatibility)."""
+        return await self.get_all_player_karmas(uuids)
 
     # === Prophecy Methods (v1.1) ===
 

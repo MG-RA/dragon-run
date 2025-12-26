@@ -1,6 +1,6 @@
 """Pydantic schemas for Minecraft action tools."""
 
-from typing import Literal
+from typing import ClassVar, Literal, Set
 from pydantic import BaseModel, Field
 
 
@@ -67,9 +67,18 @@ class ApplyEffectArgs(BaseModel):
         ),
     )
     duration: int = Field(
-        default=60, ge=1, le=600, description="Effect duration in seconds (1-600)"
+        default=30, ge=1, le=120, description="Effect duration in seconds (1-120, max 2 min)"
     )
     amplifier: int = Field(default=0, ge=0, le=5, description="Effect amplifier (0-5)")
+
+    # Dangerous effects have lower max duration enforced in validation
+    DANGEROUS_EFFECTS: ClassVar[Set[str]] = {"poison", "wither", "hunger", "levitation", "darkness", "blindness"}
+    MAX_DANGEROUS_DURATION: ClassVar[int] = 30  # Max 30 seconds for dangerous effects
+
+    def model_post_init(self, __context) -> None:
+        """Enforce max duration for dangerous effects."""
+        if self.effect in self.DANGEROUS_EFFECTS and self.duration > self.MAX_DANGEROUS_DURATION:
+            object.__setattr__(self, 'duration', self.MAX_DANGEROUS_DURATION)
 
 
 class StrikeLightningArgs(BaseModel):
