@@ -1317,9 +1317,6 @@ public class DirectorCommands {
         // Apply aura cost
         plugin.getAuraManager().removeAura(player.getUniqueId(), auraCost, "divine respawn intervention");
 
-        // Get death location for spectator spawn
-        Location deathLoc = player.getLocation();
-
         // Schedule the respawn flow (player needs to respawn first)
         Bukkit.getScheduler().runTaskLater(plugin, () -> {
             // Force respawn if not already
@@ -1327,33 +1324,43 @@ public class DirectorCommands {
                 player.spigot().respawn();
             }
 
-            plugin.getWorldManager().teleportToHardcore(player);
+            // Teleport to hardcore world and wait for it to complete
+            plugin.getWorldManager().teleportToHardcore(player).thenAccept(success -> {
+                if (!success) {
+                    player.sendMessage(Component.text("Failed to teleport to hardcore world", NamedTextColor.RED));
+                    return;
+                }
 
-            // Set to spectator mode at death location
-            player.setGameMode(org.bukkit.GameMode.SPECTATOR);
-            player.teleport(deathLoc.add(0, 2, 0)); // Slightly above death location
+                // Run the rest on the main thread
+                Bukkit.getScheduler().runTask(plugin, () -> {
+                    // Set to spectator mode at hardcore spawn (elevated for safety)
+                    Location spawnLoc = player.getLocation().add(0, 5, 0);
+                    player.setGameMode(org.bukkit.GameMode.SPECTATOR);
+                    player.teleport(spawnLoc);
 
-            // Show countdown title
-            showRespawnCountdown(player, 5);
+                    // Show countdown title
+                    showRespawnCountdown(player, 5);
 
-            // After 5 seconds, switch to survival at current location
-            Bukkit.getScheduler().runTaskLater(plugin, () -> {
-                Location finalLoc = player.getLocation();
-                player.setGameMode(org.bukkit.GameMode.SURVIVAL);
-                player.teleport(finalLoc);
-                player.setHealth(player.getMaxHealth() * 0.5);
-                player.setFoodLevel(20);
+                    // After 5 seconds, switch to survival at current location
+                    Bukkit.getScheduler().runTaskLater(plugin, () -> {
+                        Location finalLoc = player.getLocation();
+                        player.setGameMode(org.bukkit.GameMode.SURVIVAL);
+                        player.teleport(finalLoc);
+                        player.setHealth(player.getMaxHealth() * 0.5);
+                        player.setFoodLevel(20);
 
-                // Dramatic effects
-                player.getWorld().strikeLightningEffect(finalLoc);
-                player.getWorld().spawnParticle(Particle.TOTEM_OF_UNDYING, finalLoc.add(0, 1, 0), 100, 1, 2, 1, 0.1);
+                        // Dramatic effects
+                        player.getWorld().strikeLightningEffect(finalLoc);
+                        player.getWorld().spawnParticle(Particle.TOTEM_OF_UNDYING, finalLoc.add(0, 1, 0), 100, 1, 2, 1, 0.1);
 
-                // Broadcast message
-                MiniMessage mm = MiniMessage.miniMessage();
-                Bukkit.broadcast(mm.deserialize(
-                    "<gold><b>DIVINE INTERVENTION</b></gold> <dark_gray>-</dark_gray> <light_purple>Eris has spared <white>" + playerName + "</white>... <i>this time.</i></light_purple>"
-                ));
-            }, 100L); // 5 seconds = 100 ticks
+                        // Broadcast message
+                        MiniMessage mm = MiniMessage.miniMessage();
+                        Bukkit.broadcast(mm.deserialize(
+                            "<gold><b>DIVINE INTERVENTION</b></gold> <dark_gray>-</dark_gray> <light_purple>Eris has spared <white>" + playerName + "</white>... <i>this time.</i></light_purple>"
+                        ));
+                    }, 100L); // 5 seconds = 100 ticks
+                });
+            });
         }, 1L);
 
         // Send WebSocket event

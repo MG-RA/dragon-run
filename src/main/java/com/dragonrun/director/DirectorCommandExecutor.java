@@ -77,7 +77,7 @@ public class DirectorCommandExecutor {
                 // greedyString takes all remaining text, no quotes needed
                 yield "director broadcast " + message;
             }
-            case "player_message", "message" -> {
+            case "player_message", "message", "whisper", "message_player" -> {
                 String player = params.get("player").getAsString();
                 String message = params.get("message").getAsString();
                 yield "director message " + player + " " + message;
@@ -139,9 +139,13 @@ public class DirectorCommandExecutor {
                     yield "director tp swap " + player + " " + target;
                 } else if ("isolate".equals(mode)) {
                     int distance = params.has("distance") ? params.get("distance").getAsInt() : 200;
+                    // Clamp to valid range (50-1000)
+                    distance = Math.max(50, Math.min(1000, distance));
                     yield "director tp isolate " + player + " " + distance;
                 } else { // random
                     int radius = params.has("radius") ? params.get("radius").getAsInt() : 100;
+                    // Clamp to valid range (10-500)
+                    radius = Math.max(10, Math.min(500, radius));
                     yield "director tp random " + player + " " + radius;
                 }
             }

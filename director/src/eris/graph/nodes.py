@@ -352,38 +352,50 @@ async def decision_node(state: ErisState, llm: Any) -> Dict[str, Any]:
     event_guidance = ""
 
     if event_type in ("run_starting", "run_started"):
-        event_guidance = "⚡ A NEW RUN IS STARTING! Set the tone!"
+        event_guidance = "⚡ A NEW RUN IS STARTING! Set the tone with words AND action!"
         force_speak = True
+        force_act = True  # Do something dramatic at run start
     elif event_type == "player_joined":
-        event_guidance = "⚡ A player has joined! Greet them!"
+        event_guidance = "⚡ A player has joined! Greet them, maybe with a gift or effect!"
         force_speak = True
     elif event_type == "player_chat":
         chat_message = event_data.get("message", "")
-        event_guidance = f"💬 Player said: \"{chat_message}\" - RESPOND to them!"
+        event_guidance = f"💬 Player said: \"{chat_message}\" - RESPOND! Consider an action too."
         force_speak = True
     elif event_type in ("player_death", "player_death_detailed"):
-        event_guidance = "⚡ DEATH! Be dramatic!"
+        event_guidance = "⚡ DEATH! Be dramatic with particles, sounds, or titles!"
         force_speak = True
+        force_act = True  # Deaths deserve drama
     elif event_type == "dragon_killed":
-        event_guidance = "⚡ THE DRAGON IS SLAIN! React!"
+        event_guidance = "⚡ THE DRAGON IS SLAIN! Fireworks? Lightning? Title?"
         force_speak = True
+        force_act = True  # Victory needs celebration
     elif event_type in ("achievement_unlocked", "advancement_made"):
         advancement_name = event_data.get('name', event_data.get('advancement', 'unknown'))
-        event_guidance = f"🏆 Achievement/Advancement: {advancement_name}"
+        event_guidance = f"🏆 Achievement: {advancement_name} - Maybe particles or a gift?"
         force_speak = True
     elif event_type == "structure_discovered":
-        event_guidance = f"🏛️ Structure found: {event_data.get('structure', 'unknown')}"
+        event_guidance = f"🏛️ Structure found: {event_data.get('structure', 'unknown')} - Foreshadow what awaits!"
         force_speak = True
     elif event_type == "run_ended":
         outcome = event_data.get("outcome", "unknown")
         if outcome == "DEATH":
-            event_guidance = "💀 THE RUN HAS ENDED IN DEATH! Comment on the tragedy!"
+            event_guidance = "💀 RUN ENDED IN DEATH! Dramatic send-off with effects!"
             force_speak = True
+            force_act = True
         elif outcome == "DRAGON_KILLED":
-            event_guidance = "🎉 VICTORY! The dragon is slain! Celebrate or bemoan!"
+            event_guidance = "🎉 VICTORY! Celebrate with fireworks and fanfare!"
             force_speak = True
+            force_act = True
     elif event_type == "idle_check":
-        event_guidance = "⏰ You've been quiet. Make your presence known!"
+        event_guidance = "⏰ You've been quiet. Disturb the peace! Spawn something, play a sound, DO something."
+        force_act = True  # Idle checks should trigger actions
+    elif event_type == "player_damaged":
+        damage = event_data.get("damage", 0)
+        health = event_data.get("health", 20)
+        if health < 6:  # Low health
+            event_guidance = f"⚠️ Player at {health/2:.0f} hearts! Taunt them or offer false mercy?"
+            force_speak = True
 
     # Add debt hint if applicable
     if debt_hint:
@@ -392,30 +404,48 @@ async def decision_node(state: ErisState, llm: Any) -> Dict[str, Any]:
     # Format intent weights for prompt
     intent_weights_str = ", ".join([f"{k}: {v:.0%}" for k, v in sorted(intent_weights.items(), key=lambda x: -x[1])[:3]])
 
+    # Build action suggestions based on mask
+    action_suggestions = []
+    if mask.value == "trickster":
+        action_suggestions = ["spawn silverfish", "teleport randomly", "give random item", "play weird sound"]
+    elif mask.value == "prophet":
+        action_suggestions = ["particles soul", "sound ambient.cave", "title with prophecy", "lightning"]
+    elif mask.value == "chaos_bringer":
+        action_suggestions = ["spawn mobs", "tnt", "damage", "weather thunder"]
+    elif mask.value == "friend":
+        action_suggestions = ["give helpful item", "heal", "particles heart", "effect speed"]
+    elif mask.value == "observer":
+        action_suggestions = ["particles", "sound", "lookat"]
+    elif mask.value == "gambler":
+        action_suggestions = ["give random item", "effect random", "spawn mob OR give item"]
+
+    action_hint = f"Consider: {', '.join(action_suggestions)}" if action_suggestions else ""
+
     decision_prompt = f"""
 Current Event: {event_type}
 Event Data: {event_data}
 {event_guidance}
 
 Your mask: {mask.value.upper()}
-Allowed behaviors: {', '.join(mask_config['allowed_behaviors'])}
 Intent tendencies: {intent_weights_str}
-Global chaos level: {global_chaos}/100
+Chaos level: {global_chaos}/100
+
+INTENTS:
+- bless: Help them (give items, heal, buffs)
+- curse: Harm them (spawn mobs, debuffs, damage)
+- test: Challenge them (spawn mobs, obstacles)
+- confuse: Misdirect (teleport, weird gifts, cryptic messages)
+- reveal: Share truth (foreshadow, warn, prophecy)
+- lie: Deceive (fake death, false promises, traps)
+
+{action_hint}
 
 Choose your response:
-1. INTENT: One of [bless, curse, test, confuse, reveal, lie]
-2. TARGET: Who to affect (player names from game state)
-3. ESCALATION: How intense (0-100, consider chaos level)
-4. SPEAK: Yes/No - should you say something?
-5. ACT: Yes/No - should you take a game action?
-
-Respond in this format:
-INTENT: [intent]
-TARGETS: [player1, player2] or [all] or [none]
-ESCALATION: [0-100]
+INTENT: [bless/curse/test/confuse/reveal/lie]
+TARGETS: [player names] or [all] or [none]
+ESCALATION: [0-100] (low=subtle, high=dramatic)
 SPEAK: [yes/no]
 ACT: [yes/no]
-REASON: [brief explanation]
 """
 
     try:

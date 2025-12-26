@@ -210,9 +210,11 @@ public class RunManager {
     public void endRunByDragonKill(UUID killerUuid) {
         if (gameState != GameState.ACTIVE) return;
 
+        // Calculate duration BEFORE changing state (getRunDurationSeconds requires ACTIVE state)
+        long duration = (System.currentTimeMillis() - runStartTime) / 1000;
+
         gameState = GameState.RESETTING;
         dragonAlive = false;
-        long duration = getRunDurationSeconds();
 
         // Get all players who participated (in hardcore world or the end)
         java.util.List<String> victorNames = new java.util.ArrayList<>();
@@ -573,7 +575,8 @@ public class RunManager {
     }
 
     public long getRunDurationSeconds() {
-        if (gameState != GameState.ACTIVE || runStartTime == 0) {
+        // Return duration if run is active OR resetting (so victory screen shows correct time)
+        if ((gameState != GameState.ACTIVE && gameState != GameState.RESETTING) || runStartTime == 0) {
             return 0;
         }
         return (System.currentTimeMillis() - runStartTime) / 1000;
