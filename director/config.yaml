@@ -16,7 +16,7 @@ database:
 ollama:
   host: http://127.0.0.1:11434
   model: ministral-3:14b
-  temperature: 0.7
+  temperature: 0.15
   keep_alive: 30m
   context_window: 32768
 

@@ -38,7 +38,7 @@ class OllamaConfig(BaseModel):
     """Ollama LLM settings."""
     host: str = "http://localhost:11434"
     model: str = "ministral-3:14b"
-    temperature: float = Field(default=0.7, ge=0.0, le=2.0)
+    temperature: float = Field(default=0.15, ge=0.0, le=2.0)
     keep_alive: str = "30m"
     context_window: int = Field(default=32768, ge=2048, le=131072)
     timeout: float = Field(default=30.0, ge=5.0, le=120.0)
