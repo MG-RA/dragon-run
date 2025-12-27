@@ -155,33 +155,46 @@ async def context_enricher(state: ErisState, db: Database) -> dict[str, Any]:
         if uuid:
             player_uuids.append(str(uuid))
 
-    # Fetch player histories
-    for player in players:
-        uuid = player.get("uuid")
-        username = player.get("username", "Unknown")
-        if uuid:
-            try:
-                uuid_str = str(uuid)
-                history = await db.get_player_summary(uuid_str)
-                if history:
-                    nemesis = await db.get_player_nemesis(uuid_str)
-                    recent_perf = await db.get_player_recent_performance(uuid_str, limit=5)
+    # Batch fetch all player enrichment data (summary + nemesis + performance) in 3 queries instead of N*3
+    try:
+        enrichment_data = await db.get_all_player_enrichment(player_uuids, limit=5)
 
-                    if nemesis:
-                        history["nemesis"] = nemesis
-                    if recent_perf:
-                        history["trend"] = recent_perf.get("trend", "unknown")
-                        history["win_rate"] = recent_perf.get("win_rate", 0)
-                        history["recent_wins"] = recent_perf.get("recent_wins", 0)
-                        history["recent_runs"] = recent_perf.get("recent_runs", 0)
+        # Map enrichment data to usernames
+        for player in players:
+            uuid = str(player.get("uuid", ""))
+            username = player.get("username", "Unknown")
+            if uuid in enrichment_data:
+                data = enrichment_data[uuid]
+                summary = data.get("summary", {})
+                nemesis = data.get("nemesis")
+                perf = data.get("performance", {})
 
-                    player_histories[username] = history
-                    logger.debug(
-                        f"📚 {username}: {history.get('total_runs', 0)} runs, "
-                        f"{history.get('aura', 0)} aura"
-                    )
-            except Exception as e:
-                logger.error(f"📚 Error fetching history for {username}: {e}")
+                # Build player history dict
+                history = {
+                    "username": summary.get("username", username),
+                    "aura": summary.get("aura", 0),
+                    "total_runs": summary.get("total_runs", 0),
+                    "total_deaths": summary.get("total_deaths", 0),
+                    "dragons_killed": summary.get("dragons_killed", 0),
+                    "hours_played": summary.get("hours_played", 0),
+                    "achievement_count": summary.get("achievement_count", 0),
+                }
+
+                if nemesis:
+                    history["nemesis"] = nemesis
+                if perf:
+                    history["trend"] = perf.get("trend", "unknown")
+                    history["win_rate"] = perf.get("win_rate", 0)
+                    history["recent_wins"] = perf.get("recent_wins", 0)
+                    history["recent_runs"] = perf.get("recent_runs", 0)
+
+                player_histories[username] = history
+                logger.debug(
+                    f"📚 {username}: {history.get('total_runs', 0)} runs, "
+                    f"{history.get('aura', 0)} aura"
+                )
+    except Exception as e:
+        logger.error(f"📚 Error batch fetching player enrichment: {e}")
 
     # Fetch player karmas for all players
     player_karmas = {}
@@ -543,100 +556,60 @@ INTENTS:
 
 {action_hint}
 
-Choose your response:
-INTENT: [bless/curse/test/confuse/reveal/lie]
-TARGETS: [player names] or [all] or [none]
-ESCALATION: [0-100] (low=subtle, high=dramatic)
-SPEAK: [yes/no]
-ACT: [yes/no]
+Available players: {', '.join([p.get("username", "") for p in state.get("game_state", {}).get("players", [])])}
+
+Make a decision.
 """
 
     trace_id = state.get("trace_id", "")
 
     try:
+        # Use structured output for reliable parsing
+        structured_llm = llm.with_structured_output(DecisionOutput)
+
         with span(
-            "llm.invoke",
+            f"llm.invoke:decision:{event_type}:{mask.value}",
             trace_id=trace_id,
-            node="decision",
-            mask=mask.value,
-            event_type=event_type,
             prompt_length=len(system_prompt) + len(decision_prompt),
             global_chaos=global_chaos,
             force_speak=force_speak,
             force_act=force_act,
         ) as llm_span:
-            response = await llm.ainvoke(
+            decision: DecisionOutput = await structured_llm.ainvoke(
                 [SystemMessage(content=system_prompt), HumanMessage(content=decision_prompt)]
             )
 
             # Enrich span with response data
-            response_text = response.content if response.content else ""
             llm_span.set_attributes(
-                response_length=len(response_text),
-                response_preview=response_text[:200] if response_text else "",
+                intent=decision.intent,
+                targets_count=len(decision.targets),
+                escalation=decision.escalation,
+                should_speak=decision.should_speak,
+                should_act=decision.should_act,
             )
 
-        content = response.content.lower()
-
-        # Parse intent
-        intent = ErisIntent.CONFUSE.value  # default
-        for i in ErisIntent:
-            if f"intent: {i.value}" in content:
-                intent = i.value
-                break
-
-        # Parse targets
-        targets = []
-        game_state = state.get("game_state", {})
-        players = game_state.get("players", [])
-        player_names = [p.get("username", "") for p in players if p.get("username")]
-
-        if "targets: [all]" in content or "targets: all" in content:
-            targets = player_names
-        elif "targets: [none]" in content or "targets: none" in content:
-            targets = []
-        else:
-            for name in player_names:
-                if name.lower() in content:
-                    targets.append(name)
-
-        # Parse escalation
-        escalation = 30  # default
-        import re
-
-        esc_match = re.search(r"escalation:\s*(\d+)", content)
-        if esc_match:
-            escalation = min(100, max(0, int(esc_match.group(1))))
+        # Apply force flags
+        if force_speak:
+            decision.should_speak = True
+        if force_act:
+            decision.should_act = True
 
         # Cap escalation based on chaos
         if global_chaos > 70:
             max_safe = 100 - (global_chaos * 0.5)
-            if escalation > max_safe:
+            if decision.escalation > max_safe:
                 logger.info(
-                    f"⚠️ Escalation capped from {escalation} to {max_safe} due to high chaos"
+                    f"⚠️ Escalation capped from {decision.escalation} to {max_safe} due to high chaos"
                 )
-                escalation = int(max_safe)
-
-        # Parse speak/act
-        should_speak = "speak: yes" in content or force_speak
-        should_act = "act: yes" in content or force_act
-
-        decision = DecisionOutput(
-            intent=intent,
-            targets=targets,
-            escalation=escalation,
-            should_speak=should_speak,
-            should_act=should_act,
-        )
+                decision.escalation = int(max_safe)
 
         logger.info(
-            f"🎯 Decision: intent={intent}, targets={targets}, "
-            f"escalation={escalation}, speak={should_speak}, act={should_act}"
+            f"🎯 Decision: intent={decision.intent}, targets={decision.targets}, "
+            f"escalation={decision.escalation}, speak={decision.should_speak}, act={decision.should_act}"
         )
 
         return {
-            "messages": [response],
-            "decision": decision,
+            "decision": decision.model_dump(),  # Convert Pydantic model to dict for state
         }
 
     except Exception as e:
@@ -656,12 +629,12 @@ ACT: [yes/no]
 # === Node 5: Agentic Action (Scriptwriting) ===
 
 
-async def agentic_action(state: ErisState, llm_with_tools: Any) -> dict[str, Any]:
+async def agentic_action(state: ErisState, llm: Any, tools: list) -> dict[str, Any]:
     """
     Scriptwriting node - generates narrative text and planned actions.
-    LLM receives mask constraints and writes the script.
+    LLM receives mask-filtered tools and writes the script.
 
-    v1.1: Outputs ScriptOutput with narrative + planned_actions with purposes.
+    v1.3: Filters tools based on mask before binding to LLM.
     """
     event = state["current_event"]
     event_type = event.get("eventType", "unknown") if event else "unknown"
@@ -683,6 +656,20 @@ async def agentic_action(state: ErisState, llm_with_tools: Any) -> dict[str, Any
             "script": ScriptOutput(narrative_text="", planned_actions=[]),
         }
 
+    # === MASK-BASED TOOL FILTERING ===
+    # Get allowed tools for this mask
+    from ..persona.masks import get_all_allowed_tools
+
+    allowed_tool_names = get_all_allowed_tools(mask)
+
+    # Filter tool list to only allowed tools
+    filtered_tools = [t for t in tools if t.name in allowed_tool_names]
+
+    # Bind filtered tools to LLM
+    llm_with_filtered_tools = llm.bind_tools(filtered_tools) if filtered_tools else llm
+
+    logger.info(f"🎭 Mask {mask.value} sees {len(filtered_tools)}/{len(tools)} tools: {[t.name for t in filtered_tools]}")
+
     # Build context
     context_str = _build_context(state)
     system_prompt = build_eris_prompt(mask, context_str)
@@ -693,63 +680,51 @@ async def agentic_action(state: ErisState, llm_with_tools: Any) -> dict[str, Any
     player_names = [p.get("username", "") for p in players if p.get("username")]
     player_list_str = ", ".join(player_names) if player_names else "No players online"
 
-    # Build tool guidance based on mask
-    allowed_groups = mask_config.get("allowed_tool_groups", [])
-    discouraged_groups = mask_config.get("discouraged_tool_groups", [])
-
+    # Remove verbose tool guidance - the LLM only sees allowed tools now
     tool_guidance = f"""
-MASK TOOL PREFERENCES (soft guidance):
-✓ Encouraged: {", ".join(allowed_groups)}
-✗ Discouraged (but allowed): {", ".join(discouraged_groups)}
-
-You CAN use any tool, but staying in character means preferring encouraged tools.
+Available players: {player_list_str}
 """
 
     # Build action prompt
+    speak_or_act = []
+    if decision["should_speak"]:
+        speak_or_act.append("Speak")
+    if decision["should_act"]:
+        speak_or_act.append("Act with tools")
+    action_instruction = " and ".join(speak_or_act) if speak_or_act else "Observe silently"
+
     action_prompt = f"""
 Event: {event_type}
 Event Data: {event_data}
-
-YOUR DECISION:
-- Intent: {decision["intent"]}
-- Targets: {decision["targets"]}
-- Escalation: {decision["escalation"]}/100
-- Should Speak: {decision["should_speak"]}
-- Should Act: {decision["should_act"]}
-
-CURRENT PLAYERS (only use these names): {player_list_str}
-
 {tool_guidance}
 
-⚠️ CRITICAL OUTPUT FORMAT:
-- If should_speak: Use the broadcast tool OR output ONLY a short message (5-15 words max)
-- Message format: MiniMessage tags like <dark_purple>text</dark_purple>, <i>italic</i>, <b>bold</b>
-- NEVER use markdown (**bold**, *italic*, ##headers, bullet points)
-- NEVER output numbered lists, explanations, or structured plans
-- NEVER include tool names or JSON in your text output
-- ONE short sentence only!
+YOUR ROLE: {action_instruction}
+- Intent: {decision["intent"]}
+- Targets: {decision["targets"] if decision["targets"] else "none"}
+- Escalation: {decision["escalation"]}/100 (higher = more dramatic)
 
-GOOD output: The <dark_purple>void</dark_purple> <i>whispers</i>...
-BAD output: 1. **Broadcast**: ```text here```
+⚠️ OUTPUT FORMAT:
+- Messages: Use broadcast tool OR output ONLY 5-15 words max
+- Format: MiniMessage tags like <dark_purple>text</dark_purple>, <i>italic</i>, <b>bold</b>
+- NEVER use markdown (**bold**, *italic*) or numbered lists
+- ONE sentence only
 
-Be {mask.value.upper()}! Output ONLY the message or use tools.
+Be {mask.value.upper()}! Act now.
 """
 
     trace_id = state.get("trace_id", "")
 
     try:
         with span(
-            "llm.invoke",
+            f"llm.invoke:agentic:{event_type}:{mask.value}",
             trace_id=trace_id,
-            node="agentic_action",
-            mask=mask.value,
             intent=decision.get("intent", ""),
             should_speak=decision.get("should_speak", False),
             should_act=decision.get("should_act", False),
             escalation=decision.get("escalation", 0),
             prompt_length=len(system_prompt) + len(action_prompt),
         ) as llm_span:
-            response = await llm_with_tools.ainvoke(
+            response = await llm_with_filtered_tools.ainvoke(
                 [SystemMessage(content=system_prompt), HumanMessage(content=action_prompt)]
             )
 
@@ -1084,9 +1059,8 @@ async def tool_executor(
         message_preview = args.get("message", "")[:80] if args.get("message") else ""
 
         with span(
-            "tool.execute",
+            f"tool.execute:{tool_name}:{mask.value}",
             trace_id=trace_id,
-            tool=tool_name,
             purpose=purpose,
             target_player=target_player,
             message_preview=message_preview,

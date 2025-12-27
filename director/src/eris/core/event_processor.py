@@ -9,6 +9,7 @@ from datetime import datetime
 from typing import Any
 
 from ..graph.state import EventPriority
+from ..validation.advancement_graph import find_missing_prerequisites, is_valid_progression
 
 logger = logging.getLogger(__name__)
 
@@ -58,6 +59,9 @@ class EventProcessor:
         self._processing = False
         self._lock = asyncio.Lock()
 
+        # Advancement progression tracking per player (player_uuid -> list of advancements)
+        self.advancement_history: dict[str, list[str]] = {}
+
     async def add_event(self, event: dict) -> bool:
         """Add event to queue. Returns True if event was queued."""
         event_type = event.get("eventType", "")
@@ -91,6 +95,11 @@ class EventProcessor:
 
         self.last_process_time[event_type] = now
         logger.debug(f"📥 Event queued: {event_type} (priority: {priority.name})")
+
+        # Track advancement progression for validation
+        if event_type == "advancement_made":
+            self.track_advancement(event)
+
         return True
 
     async def get_next_event(self) -> dict | None:
@@ -159,3 +168,44 @@ class EventProcessor:
     def get_queue_size(self) -> int:
         """Get current queue size."""
         return len(self.event_queue)
+
+    def track_advancement(self, event: dict) -> None:
+        """Track and validate advancement progression.
+
+        Logs a warning if an advancement is received out of order
+        (i.e., without its prerequisite being obtained first).
+
+        Args:
+            event: The advancement_made event dict with eventType and data.
+        """
+        data = event.get("data", {})
+        player_uuid = data.get("playerUuid", "unknown")
+        advancement = data.get("advancementKey", "")
+        player_name = data.get("player", "Unknown")
+
+        if not advancement:
+            return
+
+        if player_uuid not in self.advancement_history:
+            self.advancement_history[player_uuid] = []
+
+        history = self.advancement_history[player_uuid]
+        test_path = [*history, advancement]
+
+        if not is_valid_progression(test_path):
+            missing = find_missing_prerequisites(test_path)
+            missing_prereq = missing.get(advancement, "unknown")
+            logger.warning(
+                f"Progression anomaly for {player_name}: "
+                f"got '{advancement}' without prerequisite '{missing_prereq}'"
+            )
+
+        history.append(advancement)
+
+    def reset_advancement_history(self) -> None:
+        """Clear advancement history for all players.
+
+        Should be called when a run ends/resets.
+        """
+        self.advancement_history.clear()
+        logger.debug("Advancement history cleared")

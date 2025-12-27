@@ -6,6 +6,7 @@ from typing import Annotated, Any
 
 from langchain_core.messages import AnyMessage
 from langgraph.graph.message import add_messages
+from pydantic import BaseModel, Field
 from typing_extensions import TypedDict
 
 
@@ -90,14 +91,18 @@ class MaskConfig(TypedDict):
     deception_level: int  # 0-100
 
 
-class DecisionOutput(TypedDict):
-    """Structured output from decision_node."""
+class DecisionOutput(BaseModel):
+    """Structured output from decision_node using Pydantic for LLM structured output."""
 
-    intent: str  # One of ErisIntent values
-    targets: list[str]  # Player names to target
-    escalation: int  # 0-100 escalation level
-    should_speak: bool  # Whether to broadcast a message
-    should_act: bool  # Whether to take game actions
+    intent: str = Field(description="One of: bless, curse, test, confuse, reveal, lie")
+    targets: list[str] = Field(
+        default_factory=list, description="Player names to target, or empty list for none"
+    )
+    escalation: int = Field(
+        default=30, ge=0, le=100, description="Escalation level from 0 (subtle) to 100 (dramatic)"
+    )
+    should_speak: bool = Field(description="Whether Eris should broadcast a message")
+    should_act: bool = Field(description="Whether Eris should take game actions (spawn mobs, effects, etc)")
 
 
 class ScriptOutput(TypedDict):

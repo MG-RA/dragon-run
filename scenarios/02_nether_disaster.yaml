@@ -1,0 +1,101 @@
+metadata:
+  name: "Nether Disaster"
+  description: "Bob dies to blaze in nether, testing death event and run failure"
+  difficulty: medium
+  tags:
+    - death
+    - nether
+    - failure
+    - blaze
+
+party: speed_trio
+
+events:
+  # Fast progression to nether
+  - type: advancement
+    player: Alice
+    advancement: minecraft:story/mine_stone
+
+  - type: advancement
+    player: Alice
+    advancement: minecraft:story/upgrade_tools
+
+  - type: advancement
+    player: Alice
+    advancement: minecraft:story/smelt_iron
+
+  # Bob gets prerequisites
+  - type: advancement
+    player: Bob
+    advancement: minecraft:story/mine_stone
+
+  - type: advancement
+    player: Bob
+    advancement: minecraft:story/upgrade_tools
+
+  - type: advancement
+    player: Bob
+    advancement: minecraft:story/smelt_iron
+
+  - type: advancement
+    player: Bob
+    advancement: minecraft:story/lava_bucket
+
+  - type: advancement
+    player: Bob
+    advancement: minecraft:story/form_obsidian
+
+  # Bob rushes nether
+  - type: dimension
+    player: Bob
+    from_dim: overworld
+    to_dim: nether
+
+  - type: advancement
+    player: Bob
+    advancement: minecraft:story/enter_the_nether
+
+  - type: chat
+    player: Bob
+    message: "Going fast, no armor yet"
+
+  # Bob finds fortress quickly
+  - type: structure
+    player: Bob
+    structure: fortress
+
+  - type: chat
+    player: Bob
+    message: "Found fortress, engaging blazes"
+
+  # Bob takes heavy damage
+  - type: damage
+    player: Bob
+    source: blaze
+    amount: 8
+
+  - type: damage
+    player: Bob
+    source: blaze
+    amount: 7
+
+  - type: chat
+    player: Alice
+    message: "Bob get out!"
+
+  - type: chat
+    player: Bob
+    message: "Almost got the rod--"
+
+  # Bob dies - run ends
+  - type: death
+    player: Bob
+    cause: blaze
+
+  - type: chat
+    player: Alice
+    message: "NO"
+
+  - type: chat
+    player: Eve
+    message: "gg, reset"

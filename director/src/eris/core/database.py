@@ -57,12 +57,20 @@ class Database:
         FROM players p
         WHERE p.uuid = $1
         """
-        with span("db.query", query="player_summary", player_uuid=uuid[:8]):
+        with span("db.query:player_summary", player_uuid=uuid[:8], query_type="player_summary") as db_span:
             try:
                 async with self.pool.acquire() as conn:
                     row = await conn.fetchrow(query, uuid)
                     if row:
-                        return dict(row)
+                        result = dict(row)
+                        db_span.set_attributes(
+                            found=True,
+                            total_runs=result.get("total_runs", 0),
+                            aura=result.get("aura", 0),
+                        )
+                        return result
+                    else:
+                        db_span.set_attribute("found", False)
                     return {}
             except Exception as e:
                 logger.error(f"Error fetching player summary: {e}")
@@ -169,6 +177,140 @@ class Database:
         except Exception as e:
             logger.error(f"Error fetching player recent performance: {e}")
             return {}
+
+    async def get_all_player_enrichment(self, uuids: list, limit: int = 5) -> dict[str, dict]:
+        """Batch fetch all enrichment data for multiple players in optimized queries.
+
+        Returns dict[uuid] -> {
+            'summary': {...},  # player stats
+            'nemesis': str,    # most common death cause
+            'performance': {...}  # recent performance trends
+        }
+        """
+        if not self.pool or not uuids:
+            return {}
+
+        with span("db.query:player_enrichment", player_count=len(uuids), query_type="batch_enrichment") as db_span:
+            try:
+                async with self.pool.acquire() as conn:
+                    result = {}
+
+                    # Query 1: Batch fetch player summaries
+                    summary_query = """
+                    SELECT
+                        p.uuid,
+                        p.username,
+                        p.aura,
+                        p.total_runs,
+                        p.total_deaths,
+                        p.dragons_killed,
+                        p.total_playtime_seconds / 3600 as hours_played,
+                        (SELECT COUNT(*) FROM achievements_earned WHERE uuid = p.uuid) as achievement_count
+                    FROM players p
+                    WHERE p.uuid = ANY($1)
+                    """
+                    summary_rows = await conn.fetch(summary_query, uuids)
+                    for row in summary_rows:
+                        uuid = row["uuid"]
+                        result[uuid] = {
+                            "summary": dict(row),
+                            "nemesis": None,
+                            "performance": {}
+                        }
+
+                    # Query 2: Batch fetch nemesis (most common death cause per player)
+                    nemesis_query = """
+                    SELECT DISTINCT ON (uuid)
+                        uuid,
+                        death_cause
+                    FROM (
+                        SELECT uuid, death_cause, COUNT(*) as count
+                        FROM run_participants
+                        WHERE uuid = ANY($1) AND death_cause IS NOT NULL
+                        GROUP BY uuid, death_cause
+                        ORDER BY uuid, count DESC
+                    ) sub
+                    """
+                    nemesis_rows = await conn.fetch(nemesis_query, uuids)
+                    for row in nemesis_rows:
+                        uuid = row["uuid"]
+                        if uuid in result:
+                            result[uuid]["nemesis"] = row["death_cause"]
+
+                    # Query 3: Batch fetch recent performance
+                    perf_query = """
+                    SELECT
+                        rp.uuid,
+                        rh.outcome,
+                        rp.alive_duration_seconds,
+                        rp.mob_kills,
+                        rp.entered_nether,
+                        rp.entered_end,
+                        ROW_NUMBER() OVER (PARTITION BY rp.uuid ORDER BY rh.started_at DESC) as rn
+                    FROM run_participants rp
+                    JOIN run_history rh ON rp.run_id = rh.run_id
+                    WHERE rp.uuid = ANY($1)
+                    ORDER BY rp.uuid, rh.started_at DESC
+                    """
+                    perf_rows = await conn.fetch(perf_query, uuids)
+
+                    # Group performance data by UUID and calculate trends
+                    perf_by_uuid = {}
+                    for row in perf_rows:
+                        uuid = row["uuid"]
+                        if row["rn"] <= limit:  # Only keep up to `limit` recent runs
+                            if uuid not in perf_by_uuid:
+                                perf_by_uuid[uuid] = []
+                            perf_by_uuid[uuid].append(row)
+
+                    for uuid, runs in perf_by_uuid.items():
+                        if uuid not in result:
+                            continue
+
+                        total = len(runs)
+                        if total == 0:
+                            result[uuid]["performance"] = {}
+                            continue
+
+                        wins = sum(1 for r in runs if r["outcome"] == "DRAGON_KILLED")
+                        nether_visits = sum(1 for r in runs if r["entered_nether"])
+                        end_visits = sum(1 for r in runs if r["entered_end"])
+                        avg_survival = sum(r["alive_duration_seconds"] or 0 for r in runs) / total
+
+                        # Determine trend
+                        if total >= 3:
+                            recent_wins = sum(1 for r in runs[:3] if r["outcome"] == "DRAGON_KILLED")
+                            if recent_wins >= 2:
+                                trend = "improving"
+                            elif recent_wins == 0:
+                                trend = "struggling"
+                            else:
+                                trend = "stable"
+                        else:
+                            trend = "new"
+
+                        result[uuid]["performance"] = {
+                            "recent_runs": total,
+                            "recent_wins": wins,
+                            "win_rate": wins / total if total > 0 else 0,
+                            "avg_survival_seconds": int(avg_survival),
+                            "nether_rate": nether_visits / total if total > 0 else 0,
+                            "end_rate": end_visits / total if total > 0 else 0,
+                            "trend": trend,
+                        }
+
+                    db_span.set_attributes(
+                        players_enriched=len(result),
+                        summaries_fetched=len(summary_rows),
+                        nemeses_found=len(nemesis_rows),
+                        performance_records=len(perf_rows),
+                    )
+
+                    return result
+
+            except Exception as e:
+                logger.error(f"Error batch fetching player enrichment: {e}")
+                return {}
 
     async def get_player_personal_bests(self, uuid: str) -> dict:
         """Get player's personal best records."""
@@ -279,16 +421,22 @@ class Database:
         FROM eris_betrayal_debt
         WHERE player_uuid = ANY($1)
         """
-        with span("db.query", query="all_player_karmas", player_count=len(uuids)):
+        with span("db.query:player_karmas", player_count=len(uuids), query_type="batch_karmas") as db_span:
             try:
                 async with self.pool.acquire() as conn:
                     rows = await conn.fetch(query, uuids)
                     result: dict[str, dict[str, int]] = {}
+                    total_karma_entries = 0
                     for row in rows:
                         player_uuid = row["player_uuid"]
                         if player_uuid not in result:
                             result[player_uuid] = {}
                         result[player_uuid][row["mask_type"]] = row["debt_value"]
+                        total_karma_entries += 1
+                    db_span.set_attributes(
+                        players_with_karma=len(result),
+                        total_karma_entries=total_karma_entries,
+                    )
                     return result
             except Exception as e:
                 logger.error(f"Error fetching all player karmas: {e}")
@@ -386,11 +534,12 @@ class Database:
         WHERE player_uuid = ANY($1) AND is_fulfilled = FALSE
         ORDER BY created_at DESC
         """
-        with span("db.query", query="all_active_prophecies", player_count=len(uuids)):
+        with span("db.query:active_prophecies", player_count=len(uuids), query_type="batch_prophecies") as db_span:
             try:
                 async with self.pool.acquire() as conn:
                     rows = await conn.fetch(query, uuids)
                     result: dict[str, list] = {}
+                    total_prophecies = 0
                     for row in rows:
                         player_uuid = row["player_uuid"]
                         if player_uuid not in result:
@@ -403,6 +552,11 @@ class Database:
                                 "created_at": row["created_at"],
                             }
                         )
+                        total_prophecies += 1
+                    db_span.set_attributes(
+                        players_with_prophecies=len(result),
+                        total_prophecies=total_prophecies,
+                    )
                     return result
             except Exception as e:
                 logger.error(f"Error fetching all active prophecies: {e}")

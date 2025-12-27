@@ -32,6 +32,14 @@ def init_tracing() -> bool:
             service_name="eris-director",
             service_version="1.3",
         )
+
+        # Enable asyncpg (PostgreSQL) instrumentation for detailed query tracing
+        try:
+            logfire.instrument_asyncpg()
+            logger.info("PostgreSQL (asyncpg) instrumentation enabled")
+        except Exception as e:
+            logger.warning(f"Failed to instrument asyncpg: {e}")
+
         _initialized = True
         logger.info("Logfire tracing initialized")
         return True

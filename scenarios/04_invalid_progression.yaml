@@ -1,0 +1,29 @@
+metadata:
+  name: "Invalid Progression Test"
+  description: "SHOULD FAIL VALIDATION: Player gets nether advancement before obsidian"
+  difficulty: medium
+  tags:
+    - invalid
+    - test
+    - validation
+
+party: solo_hardcore
+
+events:
+  - type: advancement
+    player: Solo
+    advancement: minecraft:story/mine_stone
+
+  - type: advancement
+    player: Solo
+    advancement: minecraft:story/upgrade_tools
+
+  # INVALID: Skip smelt_iron, lava_bucket, form_obsidian and go straight to nether
+  # This should be caught by the advancement validator
+  - type: advancement
+    player: Solo
+    advancement: minecraft:story/enter_the_nether
+
+  - type: chat
+    player: Solo
+    message: "How did I get here without obsidian?"

@@ -1,0 +1,198 @@
+metadata:
+  name: "Eris Chaos Test"
+  description: "Heavy Eris intervention with mobs, damage, and chat during critical moments"
+  difficulty: hard
+  tags:
+    - eris
+    - chaos
+    - tension
+    - intervention
+
+party:
+  Charlie:
+    role: gatherer
+    starting_health: 20
+    starting_inventory: {}
+  Dana:
+    role: nether_runner
+    starting_health: 20
+    starting_inventory: {}
+
+events:
+  # Normal start
+  - type: advancement
+    player: Charlie
+    advancement: minecraft:story/mine_stone
+
+  - type: chat
+    player: Charlie
+    message: "Clean run, no mistakes"
+
+  # Eris could intervene here with mobs/messages
+
+  - type: advancement
+    player: Charlie
+    advancement: minecraft:story/upgrade_tools
+
+  - type: advancement
+    player: Charlie
+    advancement: minecraft:story/smelt_iron
+
+  # Player takes damage (could be from Eris spawn_mob)
+  - type: damage
+    player: Charlie
+    source: creeper
+    amount: 12
+
+  - type: chat
+    player: Charlie
+    message: "Where did that creeper come from?!"
+
+  # Health recovery
+  - type: health
+    player: Charlie
+    amount: 6
+
+  # Progression continues
+  - type: advancement
+    player: Charlie
+    advancement: minecraft:story/lava_bucket
+
+  - type: advancement
+    player: Charlie
+    advancement: minecraft:story/form_obsidian
+
+  # Dana gets obsidian tools/prerequisites
+  - type: advancement
+    player: Dana
+    advancement: minecraft:story/mine_stone
+
+  - type: advancement
+    player: Dana
+    advancement: minecraft:story/upgrade_tools
+
+  - type: advancement
+    player: Dana
+    advancement: minecraft:story/smelt_iron
+
+  - type: advancement
+    player: Dana
+    advancement: minecraft:story/lava_bucket
+
+  - type: advancement
+    player: Dana
+    advancement: minecraft:story/form_obsidian
+
+  # Dana enters nether
+  - type: dimension
+    player: Dana
+    from_dim: overworld
+    to_dim: nether
+
+  - type: advancement
+    player: Dana
+    advancement: minecraft:story/enter_the_nether
+
+  # Heavy damage in nether (Eris could spawn extra blazes here)
+  - type: damage
+    player: Dana
+    source: blaze
+    amount: 9
+
+  - type: damage
+    player: Dana
+    source: blaze
+    amount: 8
+
+  - type: chat
+    player: Dana
+    message: "Too many blazes!"
+
+  # Eris could heal here (divine intervention)
+  - type: health
+    player: Dana
+    amount: 10
+
+  - type: chat
+    player: Dana
+    message: "...thanks?"
+
+  # Dana gets rods
+  - type: mob_kill
+    player: Dana
+    mob_type: blaze
+    count: 5
+
+  - type: inventory
+    player: Dana
+    action: add
+    item: blaze_rod
+    count: 8
+
+  - type: advancement
+    player: Dana
+    advancement: minecraft:nether/obtain_blaze_rod
+
+  # Back to overworld
+  - type: dimension
+    player: Dana
+    from_dim: nether
+    to_dim: overworld
+
+  # Locate stronghold
+  - type: advancement
+    player: Dana
+    advancement: minecraft:story/follow_ender_eye
+
+  - type: structure
+    player: Charlie
+    structure: stronghold
+
+  # Dana enters End first (triggers advancement)
+  - type: dimension
+    player: Dana
+    from_dim: overworld
+    to_dim: the_end
+
+  - type: advancement
+    player: Dana
+    advancement: minecraft:story/enter_the_end
+
+  # Charlie follows
+  - type: dimension
+    player: Charlie
+    from_dim: overworld
+    to_dim: the_end
+
+  # Dragon fight with chaos
+  - type: damage
+    player: Charlie
+    source: dragon
+    amount: 10
+
+  - type: damage
+    player: Dana
+    source: enderman
+    amount: 6
+
+  - type: chat
+    player: Charlie
+    message: "This feels scripted"
+
+  # Close call
+  - type: damage
+    player: Dana
+    source: dragon
+    amount: 7
+
+  # Victory despite chaos
+  - type: dragon_kill
+    player: Dana
+
+  - type: advancement
+    player: Dana
+    advancement: minecraft:end/kill_dragon
+
+  - type: chat
+    player: Dana
+    message: "We actually did it"

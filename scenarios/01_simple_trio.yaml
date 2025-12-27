@@ -1,0 +1,179 @@
+metadata:
+  name: "Simple Trio Speedrun"
+  description: "Basic 3-player run with standard progression, no deaths"
+  difficulty: easy
+  tags:
+    - trio
+    - clean_run
+    - tutorial
+
+party: speed_trio  # Expands to Alice (gatherer), Bob (nether_runner), Eve (explorer)
+
+events:
+  # Early game - Alice gathers resources
+  - type: advancement
+    player: Alice
+    advancement: minecraft:story/mine_stone
+
+  - type: advancement
+    player: Alice
+    advancement: minecraft:story/upgrade_tools
+
+  - type: chat
+    player: Alice
+    message: "Got iron tools"
+
+  - type: advancement
+    player: Alice
+    advancement: minecraft:story/smelt_iron
+
+  # Bob takes some damage from mob
+  - type: damage
+    player: Bob
+    source: zombie
+    amount: 4
+
+  - type: chat
+    player: Bob
+    message: "Need armor"
+
+  # Alice crafts armor
+  - type: inventory
+    player: Alice
+    action: add
+    item: iron_chestplate
+    count: 1
+
+  - type: inventory
+    player: Alice
+    action: add
+    item: iron_leggings
+    count: 1
+
+  # Eve discovers stronghold
+  - type: structure
+    player: Eve
+    structure: stronghold
+
+  - type: chat
+    player: Eve
+    message: "Found it! Coords in chat"
+
+  # Bob gets prerequisites for nether
+  - type: advancement
+    player: Bob
+    advancement: minecraft:story/mine_stone
+
+  - type: advancement
+    player: Bob
+    advancement: minecraft:story/upgrade_tools
+
+  - type: advancement
+    player: Bob
+    advancement: minecraft:story/smelt_iron
+
+  - type: advancement
+    player: Bob
+    advancement: minecraft:story/lava_bucket
+
+  - type: advancement
+    player: Bob
+    advancement: minecraft:story/form_obsidian
+
+  # Bob enters nether
+  - type: dimension
+    player: Bob
+    from_dim: overworld
+    to_dim: nether
+
+  - type: advancement
+    player: Bob
+    advancement: minecraft:story/enter_the_nether
+
+  - type: chat
+    player: Bob
+    message: "In nether, looking for fortress"
+
+  # Bob finds fortress
+  - type: structure
+    player: Bob
+    structure: fortress
+
+  # Bob fights blazes
+  - type: damage
+    player: Bob
+    source: blaze
+    amount: 6
+
+  - type: mob_kill
+    player: Bob
+    mob_type: blaze
+    count: 3
+
+  - type: inventory
+    player: Bob
+    action: add
+    item: blaze_rod
+    count: 6
+
+  - type: advancement
+    player: Bob
+    advancement: minecraft:nether/obtain_blaze_rod
+
+  - type: chat
+    player: Bob
+    message: "Got rods, heading back"
+
+  # Back to overworld, locate stronghold
+  - type: dimension
+    player: Bob
+    from_dim: nether
+    to_dim: overworld
+
+  - type: advancement
+    player: Bob
+    advancement: minecraft:story/follow_ender_eye
+
+  # Bob enters End first (triggers advancement)
+  - type: dimension
+    player: Bob
+    from_dim: overworld
+    to_dim: the_end
+
+  - type: advancement
+    player: Bob
+    advancement: minecraft:story/enter_the_end
+
+  # Rest of team enters
+  - type: dimension
+    player: Alice
+    from_dim: overworld
+    to_dim: the_end
+
+  - type: dimension
+    player: Eve
+    from_dim: overworld
+    to_dim: the_end
+
+  - type: chat
+    player: Alice
+    message: "Let's do this"
+
+  # Dragon fight
+  - type: damage
+    player: Eve
+    source: dragon
+    amount: 8
+
+  - type: damage
+    player: Alice
+    source: enderman
+    amount: 5
+
+  # Victory!
+  - type: dragon_kill
+    player: Bob
+
+  - type: advancement
+    player: Bob
+    advancement: minecraft:end/kill_dragon

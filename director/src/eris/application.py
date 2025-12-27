@@ -349,18 +349,23 @@ class ErisApplication:
         # Extract player info for tracing
         event_player = data.get("data", {}).get("player", data.get("data", {}).get("username", ""))
         game_state_name = self.game_context.state.get("gameState", "UNKNOWN")
-        player_count = len(self.game_context.state.get("players", []))
+        online_players = self.game_context.state.get("players", [])
+        player_names = [p.get("username", "Unknown") for p in online_players]
 
         with span(
-            "event.process",
+            f"event.process:{event_type}",
             trace_id=trace_id,
-            event_type=event_type,
-            player=event_player,
+            event_player=event_player,  # The player who triggered this specific event
+            players=player_names,  # All online players
+            player_count=len(online_players),
             game_state=game_state_name,
-            player_count=player_count,
             is_idle_check=is_idle_check,
         ):
             logger.info(f"Event: {event_type} [trace:{trace_id}]")
+
+            # Reset advancement history on run lifecycle events
+            if event_type in ("run_ended", "run_started", "run_starting"):
+                self.services.event_processor.reset_advancement_history()
 
             # Add to event processor queue
             queued = await self.services.event_processor.add_event(event_data)
@@ -400,7 +405,7 @@ class ErisApplication:
             # Invoke the graph with timeout
             try:
                 with span(
-                    "graph.invoke", trace_id=trace_id, timeout=self.config.graph.invoke_timeout
+                    f"graph.invoke:{event_type}", trace_id=trace_id, timeout=self.config.graph.invoke_timeout
                 ) as graph_span:
                     logger.info(f"Processing event: {event_type} [trace:{trace_id}]")
 

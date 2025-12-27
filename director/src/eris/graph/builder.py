@@ -55,8 +55,8 @@ def create_graph(
     # Create game tools bound to websocket client
     tools = create_game_tools(ws_client) if ws_client else []
 
-    # Bind tools to LLM for agentic behavior
-    llm_with_tools = llm.bind_tools(tools) if llm and tools else llm
+    # Note: Tools are now filtered per-mask in agentic_action node
+    # No longer binding all tools upfront
 
     # Create graph
     graph = StateGraph(ErisState)
@@ -142,7 +142,7 @@ def create_graph(
         return await decision_node(s, llm)
 
     async def _agentic_action(s: ErisState):
-        return await agentic_action(s, llm_with_tools)
+        return await agentic_action(s, llm, tools)
 
     async def _protection_decision(s: ErisState):
         return await protection_decision(s, llm, ws_client)
