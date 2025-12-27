@@ -1,7 +1,8 @@
-"""Eris personality masks and their characteristics."""
+"""Eris personality masks and their characteristics - v2.0 Tarot Edition."""
 
 from typing import Any
 
+from ..core.tarot import TarotCard
 from ..graph.state import ErisMask, MaskConfig
 
 # === Tool Group Definitions ===
@@ -44,7 +45,7 @@ TOOL_GROUP_MAPPING: dict[str, list[str]] = {
     "damage": ["damage_player"],
     # Deception
     "fake_death": ["fake_death"],
-    # Karma
+    # Aura (player reputation)
     "aura": ["modify_aura"],
 }
 
@@ -130,16 +131,20 @@ MASK_TOOL_GROUPS: dict[str, dict[str, list[str]]] = {
 }
 
 
-# === Mask Karma Fields ===
-# Maps each mask to its karma type for the karma vector system
+# === Tarot → Mask Affinities ===
+# Each Tarot card has preferred masks that resonate with that archetype
+# Used by select_mask to bias mask selection based on player tarots
 
-MASK_KARMA_FIELDS: dict[str, str] = {
-    "TRICKSTER": "irony",  # Renamed from prank_karma
-    "PROPHET": "doom",  # Renamed from doom_karma
-    "FRIEND": "betrayal",  # Renamed from betrayal_karma
-    "CHAOS_BRINGER": "wrath",  # Renamed from wrath_karma
-    "OBSERVER": "inevitability",  # Renamed from silence_karma
-    "GAMBLER": "risk",  # Renamed from risk_karma
+TAROT_MASK_AFFINITY: dict[TarotCard, list[ErisMask]] = {
+    TarotCard.FOOL: [ErisMask.TRICKSTER, ErisMask.CHAOS_BRINGER],
+    TarotCard.MAGICIAN: [ErisMask.GAMBLER, ErisMask.OBSERVER],
+    TarotCard.HERMIT: [ErisMask.PROPHET, ErisMask.OBSERVER],
+    TarotCard.EMPEROR: [ErisMask.FRIEND, ErisMask.GAMBLER],
+    TarotCard.DEVIL: [ErisMask.CHAOS_BRINGER, ErisMask.GAMBLER],
+    TarotCard.TOWER: [ErisMask.CHAOS_BRINGER, ErisMask.TRICKSTER],
+    TarotCard.DEATH: [ErisMask.PROPHET, ErisMask.CHAOS_BRINGER],
+    TarotCard.LOVERS: [ErisMask.FRIEND, ErisMask.TRICKSTER],
+    TarotCard.STAR: [ErisMask.FRIEND, ErisMask.PROPHET],
 }
 
 
@@ -160,7 +165,7 @@ TOOL_SEVERITY: dict[str, dict[str, str]] = {
     },
     # Damage tools
     "damage_player": {
-        "FRIEND": "severe",  # FRIEND damaging is severe (unless betrayal_karma >= 50)
+        "FRIEND": "severe",  # FRIEND damaging is severe (unless high annoyance)
         "OBSERVER": "moderate",  # OBSERVER damaging is unusual
     },
     # Mob spawning
@@ -176,7 +181,9 @@ TOOL_SEVERITY: dict[str, dict[str, str]] = {
 }
 
 
-def get_tool_violation_severity(mask: ErisMask, tool: str, karma: int = 0) -> str:
+def get_tool_violation_severity(
+    mask: ErisMask, tool: str, high_annoyance: bool = False
+) -> str:
     """
     Get violation severity for a tool used by a mask.
 
@@ -186,7 +193,7 @@ def get_tool_violation_severity(mask: ErisMask, tool: str, karma: int = 0) -> st
         "moderate" - Prominent warning, but allow
         "severe" - Block the action entirely
 
-    Special case: FRIEND can damage after betrayal_karma >= 50 (betrayal happening)
+    v2.0: Replaces karma with high_annoyance for FRIEND betrayal check.
     """
     discouraged = get_all_discouraged_tools(mask)
 
@@ -198,8 +205,8 @@ def get_tool_violation_severity(mask: ErisMask, tool: str, karma: int = 0) -> st
     tool_severities = TOOL_SEVERITY.get(tool, {})
     severity = tool_severities.get(mask.name, "minor")
 
-    # Special case: FRIEND can damage after betrayal threshold
-    if mask.name == "FRIEND" and tool == "damage_player" and karma >= 50:
+    # Special case: FRIEND can damage when annoyance is high (betrayal mode)
+    if mask.name == "FRIEND" and tool == "damage_player" and high_annoyance:
         return "minor"  # Betrayal is happening, allow it with soft warning
 
     return severity
@@ -334,6 +341,6 @@ def get_all_discouraged_tools(mask: ErisMask) -> list[str]:
     return list(set(tools))  # Deduplicate
 
 
-def get_karma_field_for_mask(mask: ErisMask) -> str:
-    """Get the karma field name for a mask."""
-    return MASK_KARMA_FIELDS.get(mask.name, "generic_karma")
+def get_tarot_affinity_masks(tarot_card: TarotCard) -> list[ErisMask]:
+    """Get the masks that resonate with a Tarot card."""
+    return TAROT_MASK_AFFINITY.get(tarot_card, [])

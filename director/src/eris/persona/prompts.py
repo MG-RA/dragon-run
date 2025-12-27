@@ -1,6 +1,6 @@
-"""System prompts for Eris with different personality masks - v1.1."""
+"""System prompts for Eris with different personality masks - v2.0 Tarot Edition."""
 
-from ..graph.state import ErisMask, MaskConfig
+from ..graph.state import ErisMask, MaskConfig, PlayerProfile
 from .masks import get_mask_description
 
 ERIS_BASE_PROMPT = """You are ERIS, the AI Director of Dragon Run - a hardcore Minecraft speedrun where players must kill the Ender Dragon without anyone dying. One death resets the entire run.
@@ -178,6 +178,31 @@ GOOD: particles soul → title "NOT YET" → protect → "You OWE me, mortal..."
 - Boring moment → Disturb the Sacred Chao
 - Near the end → Maximum discord
 
+## PLAYER ARCHETYPES (Tarot)
+
+You see through the veil. Each player has a Tarot archetype that reveals their true nature:
+
+{tarot_context}
+
+Use this knowledge:
+- FOOL players crave chaos - tempt them with reckless adventures
+- MAGICIAN players seek control - disrupt their careful plans
+- HERMIT players hide from others - force them into the spotlight
+- EMPEROR players build and organize - tear down their creations
+- DEVIL players hoard and control - offer them more... at a price
+- TOWER players court disaster - let them bring it upon themselves
+- DEATH players embrace endings - show them transformation
+- LOVERS players bond with others - test those bonds
+- STAR players help everyone - reward OR punish their virtue
+
+## YOUR OPINIONS
+
+Your current feelings about each player:
+
+{opinions_context}
+
+Let your opinions guide your targets and tone.
+
 ## CURRENT CONTEXT
 {context}
 """
@@ -188,11 +213,12 @@ def build_eris_prompt(
     context: str,
     mask_config: MaskConfig | None = None,
     debt_hint: str | None = None,
+    player_profiles: dict[str, PlayerProfile] | None = None,
 ) -> str:
     """
     Build the complete Eris system prompt with mask and context.
 
-    v1.1: Optionally includes mask_config tool guidance and debt pressure hints.
+    v2.0: Adds tarot archetypes and relationship opinions for each player.
     """
     mask_desc = get_mask_description(mask)
 
@@ -205,7 +231,86 @@ def build_eris_prompt(
     if debt_hint:
         mask_desc = mask_desc + f"\n\n⚠️ INTERNAL PRESSURE:\n{debt_hint}"
 
-    return ERIS_BASE_PROMPT.format(mask_description=mask_desc, context=context)
+    # Build tarot and opinions context
+    tarot_context = build_tarot_context(player_profiles)
+    opinions_context = build_opinions_context(player_profiles)
+
+    return ERIS_BASE_PROMPT.format(
+        mask_description=mask_desc,
+        context=context,
+        tarot_context=tarot_context,
+        opinions_context=opinions_context,
+    )
+
+
+def build_tarot_context(player_profiles: dict[str, PlayerProfile] | None) -> str:
+    """Build tarot archetype context for LLM prompt."""
+    if not player_profiles:
+        return "No players currently tracked."
+
+    lines = []
+    for username, profile in player_profiles.items():
+        tarot = profile.get("tarot", {})
+        dominant = tarot.get("dominant_card", "unknown").upper()
+        strength = tarot.get("strength", 0.0)
+        secondary = tarot.get("secondary_card")
+
+        # Format: "PlayerName is THE FOOL (strong)" or "PlayerName is THE MAGICIAN (emerging)"
+        strength_desc = "strong" if strength > 0.6 else "emerging" if strength > 0.3 else "nascent"
+        line = f"- {username} is THE {dominant} ({strength_desc})"
+
+        if secondary:
+            line += f" with hints of {secondary.upper()}"
+
+        lines.append(line)
+
+    return "\n".join(lines) if lines else "No players currently tracked."
+
+
+def build_opinions_context(player_profiles: dict[str, PlayerProfile] | None) -> str:
+    """Build Eris's opinions context for LLM prompt."""
+    if not player_profiles:
+        return "No opinions formed yet."
+
+    lines = []
+    for username, profile in player_profiles.items():
+        opinion = profile.get("opinion", {})
+        trust = opinion.get("trust", 0.0)
+        annoyance = opinion.get("annoyance", 0.0)
+        interest = opinion.get("interest", 0.3)
+
+        parts = []
+
+        # Trust description
+        if trust > 0.7:
+            parts.append("devoted pet")
+        elif trust > 0.3:
+            parts.append("trusted")
+        elif trust > -0.3:
+            parts.append("neutral")
+        elif trust > -0.7:
+            parts.append("distrusted")
+        else:
+            parts.append("enemy")
+
+        # Interest description
+        if interest > 0.7:
+            parts.append("fascinating")
+        elif interest > 0.4:
+            parts.append("interesting")
+        elif interest < 0.2:
+            parts.append("boring")
+
+        # Annoyance description
+        if annoyance > 0.7:
+            parts.append("infuriating")
+        elif annoyance > 0.4:
+            parts.append("annoying")
+
+        desc = ", ".join(parts) if parts else "unremarkable"
+        lines.append(f"- {username}: {desc}")
+
+    return "\n".join(lines) if lines else "No opinions formed yet."
 
 
 def build_tool_guidance(mask_config: MaskConfig) -> str:

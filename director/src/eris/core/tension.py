@@ -1,9 +1,11 @@
-"""Fear and Chaos management for Eris Director - v1.1.
+"""Fear and Chaos management for Eris Director - v2.0 Tarot Edition.
 
 This module manages in-memory tension state that resets per run:
 - Player fear levels (0-100 per player)
 - Player chaos contribution (per player)
 - Global chaos level (0-100)
+
+v2.0: Fracture calculation uses interest + chaos tarots instead of karma.
 
 Fear and chaos influence:
 - Mask selection probabilities
@@ -14,8 +16,16 @@ Fear and chaos influence:
 
 import logging
 from datetime import datetime
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from ..graph.state import PlayerProfile
 
 logger = logging.getLogger("eris.tension")
+
+# Chaos tarot cards that increase fracture
+CHAOS_TAROT_CARDS = {"death", "tower", "devil"}
+CHAOS_TAROT_BONUS = 10  # Fracture bonus per player with chaos tarot
 
 
 # === Fear Triggers ===
@@ -361,15 +371,17 @@ class TensionManager:
         return max(50, 100 - int(self.global_chaos * 0.5))
 
 
-# === Fracture System (v1.3) ===
-# Fracture = global_chaos + total_karma + max_player_fear
+# === Fracture System (v2.0 Tarot Edition) ===
+# Fracture = global_chaos + max_player_fear + (total_interest * 20) + chaos_card_bonus
 # Tracks overall system stress leading to phase transitions and apocalypse
 
 
 class FractureTracker:
     """
     Tracks fracture level and phase transitions.
-    Fracture is a composite metric: chaos + karma + max fear.
+
+    v2.0: Fracture is interest-based instead of karma-based.
+    fracture = global_chaos + max_fear + (total_interest * 20) + chaos_card_bonus
     """
 
     # Phase thresholds from spec
@@ -380,39 +392,62 @@ class FractureTracker:
         150: "apocalypse",
     }
 
+    # Interest multiplier - converts 0-1 interest into fracture points
+    # With 3 players at 0.7 interest each: 3 * 0.7 * 20 = 42 fracture from interest
+    INTEREST_MULTIPLIER = 20
+
     def __init__(self, tension_manager: TensionManager):
         self.tension_manager = tension_manager
-        self.total_karma: int = 0  # Sum of all karma across all players
+        self.total_interest: float = 0.0  # Sum of Eris's interest in all players
+        self.chaos_card_count: int = 0  # Players with DEATH/TOWER/DEVIL tarots
         self.apocalypse_triggered: bool = False
         self._last_fracture: int = 0
         self._last_phase: str = "normal"
 
     def reset_for_new_run(self):
         """Reset fracture state for a new run."""
-        self.total_karma = 0
+        self.total_interest = 0.0
+        self.chaos_card_count = 0
         self.apocalypse_triggered = False
         self._last_fracture = 0
         self._last_phase = "normal"
         logger.info("FractureTracker reset for new run")
 
-    def update_total_karma(self, karma_sum: int):
-        """Update total karma from player_karmas state."""
-        self.total_karma = karma_sum
+    def update_from_profiles(self, player_profiles: dict[str, "PlayerProfile"]):
+        """
+        Update fracture inputs from player profiles.
 
-    # Karma divisor - prevents karma from dominating fracture calculation
-    # With K=10, 100 total karma adds 10 fracture points
-    KARMA_DIVISOR = 10.0
+        v2.0: Replaces update_total_karma with tarot-based calculation.
+        """
+        total_interest = 0.0
+        chaos_count = 0
+
+        for profile in player_profiles.values():
+            # Sum interest
+            opinion = profile.get("opinion", {})
+            total_interest += opinion.get("interest", 0.3)
+
+            # Count chaos tarots
+            tarot = profile.get("tarot", {})
+            dominant = tarot.get("dominant_card", "").lower()
+            if dominant in CHAOS_TAROT_CARDS:
+                chaos_count += 1
+
+        self.total_interest = total_interest
+        self.chaos_card_count = chaos_count
 
     def calculate_fracture(self) -> int:
         """
         Calculate current fracture level.
 
-        fracture = global_chaos + max_player_fear + (total_karma / K)
+        v2.0 formula:
+        fracture = global_chaos + max_player_fear + (total_interest * 20) + chaos_card_bonus
 
         Fracture rises when:
         - Eris is cruel (chaos increases)
         - Players panic (fear increases)
-        - Lies pile up (karma accumulates)
+        - Eris becomes interested (watches intently)
+        - Players have chaos tarots (DEATH/TOWER/DEVIL)
         """
         global_chaos = self.tension_manager.get_global_chaos()
         max_fear = (
@@ -421,10 +456,13 @@ class FractureTracker:
             else 0
         )
 
-        # Karma contribution is divided by K to prevent it from dominating
-        karma_contribution = int(self.total_karma / self.KARMA_DIVISOR)
+        # Interest contribution
+        interest_contribution = int(self.total_interest * self.INTEREST_MULTIPLIER)
 
-        fracture = global_chaos + max_fear + karma_contribution
+        # Chaos tarot bonus
+        chaos_bonus = self.chaos_card_count * CHAOS_TAROT_BONUS
+
+        fracture = global_chaos + max_fear + interest_contribution + chaos_bonus
         return fracture
 
     def get_phase(self, fracture: int | None = None) -> str:
@@ -497,7 +535,8 @@ class FractureTracker:
             "final_fracture": self.calculate_fracture(),
             "final_phase": self.get_phase(),
             "apocalypse_triggered": self.apocalypse_triggered,
-            "total_karma": self.total_karma,
+            "total_interest": self.total_interest,
+            "chaos_card_count": self.chaos_card_count,
         }
 
 

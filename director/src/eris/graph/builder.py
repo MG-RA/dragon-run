@@ -1,10 +1,10 @@
-"""LangGraph builder for Eris state machine - v1.3 Linear Pipeline with Fracture.
+"""LangGraph builder for Eris state machine - v2.0 Tarot-Driven Pipeline.
 
-New architecture: All events flow through a single linear pipeline:
-event_classifier -> context_enricher -> fracture_check -> mask_selector -> decision_node ->
-agentic_action -> protection_decision -> tool_executor -> END
+7-node linear pipeline:
+update_player_state -> update_tarot -> update_eris_opinions -> select_mask ->
+decide_should_act -> llm_invoke -> tool_execute -> END
 
-v1.3: Added fracture_check node for phase transitions and apocalypse triggering.
+v2.0: Replaces karma with tarot archetypes.
 No conditional routing, no fast paths, no forks.
 One artery of reality.
 """
@@ -14,17 +14,16 @@ from typing import Any
 
 from langgraph.graph import END, START, StateGraph
 
-from ..core.tension import get_fracture_tracker
 from ..tools.game_tools import create_game_tools
 from .nodes import (
-    agentic_action,
-    context_enricher,
-    decision_node,
-    event_classifier,
-    mask_selector,
-    protection_decision,
-    tool_executor,
-    trigger_apocalypse,
+    decide_should_act,
+    fracture_check,
+    llm_invoke,
+    select_mask,
+    tool_execute,
+    update_eris_opinions,
+    update_player_state,
+    update_tarot,
 )
 from .state import ErisState
 
@@ -37,166 +36,109 @@ def create_graph(
     llm: object | None = None,
 ):
     """
-    Build the Eris LangGraph state machine - v1.3 Linear Pipeline with Fracture.
+    Build the Eris LangGraph state machine - v2.0 Tarot-Driven Pipeline.
 
-    All events traverse the full 8-node pipeline:
-    1. event_classifier - Assign priority (no LLM)
-    2. context_enricher - Load player histories, karmas, prophecies (no LLM)
-    3. fracture_check - Calculate fracture, check apocalypse, update phase (no LLM)
-    4. mask_selector - Select personality with karma/fracture influence (no LLM)
-    5. decision_node - Determine intent, targets, escalation (LLM)
-    6. agentic_action - Generate narrative and planned actions (LLM with tools)
-    7. protection_decision - Validate actions, handle death protection (partial LLM)
-    8. tool_executor - Execute approved actions via WebSocket (no LLM)
+    All events traverse the full 7-node pipeline:
+    1. update_player_state - Load player data, init profiles (no LLM)
+    2. update_tarot - Apply tarot drift based on event (no LLM)
+    3. update_eris_opinions - Update trust/annoyance/interest (no LLM)
+    4. select_mask - Select personality with tarot/fracture influence (no LLM)
+    5. decide_should_act - Determine intent, targets, escalation (LLM)
+    6. llm_invoke - Generate narrative and planned actions (LLM with tools)
+    7. tool_execute - Validate and execute actions via WebSocket (no LLM)
 
+    Fracture check is integrated into update_eris_opinions.
     No conditional edges. No fast paths. Linear flow only.
     """
 
     # Create game tools bound to websocket client
     tools = create_game_tools(ws_client) if ws_client else []
 
-    # Note: Tools are now filtered per-mask in agentic_action node
-    # No longer binding all tools upfront
-
     # Create graph
     graph = StateGraph(ErisState)
 
     # === Define async wrapper functions that close over dependencies ===
 
-    async def _event_classifier(s: ErisState):
-        return await event_classifier(s)
+    async def _update_player_state(s: ErisState) -> dict[str, Any]:
+        return await update_player_state(s, db)
 
-    async def _context_enricher(s: ErisState):
-        return await context_enricher(s, db)
+    async def _update_tarot(s: ErisState) -> dict[str, Any]:
+        return await update_tarot(s)
+
+    async def _update_eris_opinions(s: ErisState) -> dict[str, Any]:
+        return await update_eris_opinions(s)
 
     async def _fracture_check(s: ErisState) -> dict[str, Any]:
         """
         Calculate fracture level and check for phase transitions/apocalypse.
-        This node updates fracture, phase, and may trigger apocalypse.
-
-        Also handles debug commands:
-        - debug_trigger_apocalypse: Force apocalypse trigger
-        - debug_set_fracture: Set fracture to specific level
+        Uses tarot-based fracture calculation (interest + chaos cards).
         """
-        fracture_tracker = get_fracture_tracker()
+        return await fracture_check(s, ws_client)
 
-        # Check for debug commands first
-        event = s.get("current_event", {})
-        event_type = event.get("eventType", "") if event else ""
+    async def _select_mask(s: ErisState) -> dict[str, Any]:
+        return await select_mask(s)
 
-        if event_type == "debug_trigger_apocalypse":
-            logger.warning("🍎 DEBUG: Forcing apocalypse trigger!")
-            apocalypse_result = await trigger_apocalypse(s, ws_client)
-            fracture_tracker.mark_apocalypse_triggered()
-            return {
-                "fracture": 200,
-                "phase": "apocalypse",
-                "apocalypse_triggered": True,
-                **apocalypse_result,
-            }
+    async def _decide_should_act(s: ErisState) -> dict[str, Any]:
+        return await decide_should_act(s, llm)
 
-        if event_type == "debug_set_fracture":
-            target_fracture = event.get("data", {}).get("fracture", 100)
-            logger.warning(f"🔧 DEBUG: Setting fracture to {target_fracture}")
-            # Hack: set total_karma to achieve desired fracture
-            # fracture = chaos + fear + karma/10, so karma = (fracture - chaos - fear) * 10
-            chaos = fracture_tracker.tension_manager.get_global_chaos()
-            fear = (
-                max(fracture_tracker.tension_manager.player_fear.values())
-                if fracture_tracker.tension_manager.player_fear
-                else 0
-            )
-            required_karma = max(0, (target_fracture - chaos - fear) * 10)
-            fracture_tracker.update_total_karma(required_karma)
-            return fracture_tracker.get_state_for_graph()
+    async def _llm_invoke(s: ErisState) -> dict[str, Any]:
+        return await llm_invoke(s, llm, tools)
 
-        # Update total karma from state
-        player_karmas = s.get("player_karmas", {})
-        total_karma = 0
-        for player_data in player_karmas.values():
-            total_karma += sum(player_data.values())
-        fracture_tracker.update_total_karma(total_karma)
+    async def _tool_execute(s: ErisState) -> dict[str, Any]:
+        return await tool_execute(s, ws_client, db, llm, tools)
 
-        # Check for phase transition
-        new_phase = fracture_tracker.check_phase_transition()
-        if new_phase:
-            logger.info(f"🔥 Phase transition detected: {new_phase}")
-
-        # Check if apocalypse should trigger
-        if fracture_tracker.should_trigger_apocalypse():
-            logger.warning("🍎 APOCALYPSE THRESHOLD REACHED - Triggering apocalypse!")
-            apocalypse_result = await trigger_apocalypse(s, ws_client)
-            fracture_tracker.mark_apocalypse_triggered()
-            return {
-                **fracture_tracker.get_state_for_graph(),
-                **apocalypse_result,
-            }
-
-        # Return updated fracture state
-        return fracture_tracker.get_state_for_graph()
-
-    async def _mask_selector(s: ErisState):
-        return await mask_selector(s)
-
-    async def _decision_node(s: ErisState):
-        return await decision_node(s, llm)
-
-    async def _agentic_action(s: ErisState):
-        return await agentic_action(s, llm, tools)
-
-    async def _protection_decision(s: ErisState):
-        return await protection_decision(s, llm, ws_client)
-
-    async def _tool_executor(s: ErisState):
-        return await tool_executor(s, ws_client, db, llm, tools)
-
-    # === Add all 8 nodes ===
-    graph.add_node("event_classifier", _event_classifier)
-    graph.add_node("context_enricher", _context_enricher)
+    # === Add all 7 nodes + fracture check ===
+    graph.add_node("update_player_state", _update_player_state)
+    graph.add_node("update_tarot", _update_tarot)
+    graph.add_node("update_eris_opinions", _update_eris_opinions)
     graph.add_node("fracture_check", _fracture_check)
-    graph.add_node("mask_selector", _mask_selector)
-    graph.add_node("decision_node", _decision_node)
-    graph.add_node("agentic_action", _agentic_action)
-    graph.add_node("protection_decision", _protection_decision)
-    graph.add_node("tool_executor", _tool_executor)
+    graph.add_node("select_mask", _select_mask)
+    graph.add_node("decide_should_act", _decide_should_act)
+    graph.add_node("llm_invoke", _llm_invoke)
+    graph.add_node("tool_execute", _tool_execute)
 
-    # === Linear pipeline - no conditional edges ===
-    graph.add_edge(START, "event_classifier")
-    graph.add_edge("event_classifier", "context_enricher")
-    graph.add_edge("context_enricher", "fracture_check")
-    graph.add_edge("fracture_check", "mask_selector")
-    graph.add_edge("mask_selector", "decision_node")
-    graph.add_edge("decision_node", "agentic_action")
-    graph.add_edge("agentic_action", "protection_decision")
-    graph.add_edge("protection_decision", "tool_executor")
-    graph.add_edge("tool_executor", END)
+    # === Linear pipeline ===
+    graph.add_edge(START, "update_player_state")
+    graph.add_edge("update_player_state", "update_tarot")
+    graph.add_edge("update_tarot", "update_eris_opinions")
+    graph.add_edge("update_eris_opinions", "fracture_check")
+    graph.add_edge("fracture_check", "select_mask")
+    graph.add_edge("select_mask", "decide_should_act")
+    graph.add_edge("decide_should_act", "llm_invoke")
+    graph.add_edge("llm_invoke", "tool_execute")
+    graph.add_edge("tool_execute", END)
 
     # Compile
     compiled = graph.compile()
-    logger.info("✅ LangGraph v1.3 compiled successfully (linear pipeline with fracture)")
+    logger.info("LangGraph v2.0 compiled successfully (tarot-driven pipeline)")
 
     return compiled
 
 
 def create_graph_for_studio():
     """Create graph for LangGraph Studio (without external dependencies)."""
-    from .state import ErisState
+    from .state import ErisMask, ErisState, create_default_profile
 
     graph = StateGraph(ErisState)
 
     # Simple nodes for testing
-    async def test_classifier(state):
-        return {"event_priority": state.get("event_priority")}
+    async def test_update_player_state(state):
+        return {
+            "event_priority": state.get("event_priority"),
+            "player_profiles": {"TestPlayer": create_default_profile()},
+            "player_histories": {},
+        }
 
-    async def test_enricher(state):
-        return {"player_histories": {}, "player_karmas": {}}
+    async def test_update_tarot(state):
+        return {"player_profiles": state.get("player_profiles", {})}
+
+    async def test_update_opinions(state):
+        return {"player_profiles": state.get("player_profiles", {})}
 
     async def test_fracture(state):
         return {"fracture": 0, "phase": "normal", "apocalypse_triggered": False}
 
     async def test_mask(state):
-        from .state import ErisMask
-
         return {"current_mask": ErisMask.TRICKSTER}
 
     async def test_decision(state):
@@ -207,35 +149,37 @@ def create_graph_for_studio():
                 "escalation": 30,
                 "should_speak": True,
                 "should_act": False,
+                "tarot_reasoning": None,
             }
         }
 
-    async def test_action(state):
+    async def test_llm_invoke(state):
         return {"script": {"narrative_text": "", "planned_actions": []}}
 
-    async def test_protection(state):
-        return {"approved_actions": [], "protection_warnings": []}
+    async def test_tool_execute(state):
+        return {
+            "approved_actions": [],
+            "protection_warnings": [],
+            "session": state.get("session", {}),
+        }
 
-    async def test_executor(state):
-        return {"session": state.get("session", {})}
-
-    graph.add_node("event_classifier", test_classifier)
-    graph.add_node("context_enricher", test_enricher)
+    graph.add_node("update_player_state", test_update_player_state)
+    graph.add_node("update_tarot", test_update_tarot)
+    graph.add_node("update_eris_opinions", test_update_opinions)
     graph.add_node("fracture_check", test_fracture)
-    graph.add_node("mask_selector", test_mask)
-    graph.add_node("decision_node", test_decision)
-    graph.add_node("agentic_action", test_action)
-    graph.add_node("protection_decision", test_protection)
-    graph.add_node("tool_executor", test_executor)
+    graph.add_node("select_mask", test_mask)
+    graph.add_node("decide_should_act", test_decision)
+    graph.add_node("llm_invoke", test_llm_invoke)
+    graph.add_node("tool_execute", test_tool_execute)
 
-    graph.add_edge(START, "event_classifier")
-    graph.add_edge("event_classifier", "context_enricher")
-    graph.add_edge("context_enricher", "fracture_check")
-    graph.add_edge("fracture_check", "mask_selector")
-    graph.add_edge("mask_selector", "decision_node")
-    graph.add_edge("decision_node", "agentic_action")
-    graph.add_edge("agentic_action", "protection_decision")
-    graph.add_edge("protection_decision", "tool_executor")
-    graph.add_edge("tool_executor", END)
+    graph.add_edge(START, "update_player_state")
+    graph.add_edge("update_player_state", "update_tarot")
+    graph.add_edge("update_tarot", "update_eris_opinions")
+    graph.add_edge("update_eris_opinions", "fracture_check")
+    graph.add_edge("fracture_check", "select_mask")
+    graph.add_edge("select_mask", "decide_should_act")
+    graph.add_edge("decide_should_act", "llm_invoke")
+    graph.add_edge("llm_invoke", "tool_execute")
+    graph.add_edge("tool_execute", END)
 
     return graph.compile()

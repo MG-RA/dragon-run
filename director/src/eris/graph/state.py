@@ -1,4 +1,7 @@
-"""Eris State Schema for LangGraph."""
+"""Eris State Schema for LangGraph.
+
+v2.0 - Tarot-driven pipeline with relationship matrix.
+"""
 
 from datetime import datetime
 from enum import Enum
@@ -31,45 +34,72 @@ class EventPriority(Enum):
     ROUTINE = 5  # Proactive checks
 
 
-class ErisIntent(Enum):
-    """Eris's intent for an action."""
-
-    BLESS = "bless"  # Help the player
-    CURSE = "curse"  # Harm the player
-    TEST = "test"  # Challenge the player
-    CONFUSE = "confuse"  # Misdirect or deceive
-    REVEAL = "reveal"  # Share truth or prophecy
-    LIE = "lie"  # Deceive with false information
+# === Tarot-driven TypedDicts (v2.0) ===
 
 
-# === New TypedDicts for v1.1 ===
+class PlayerTarotProfile(TypedDict):
+    """Tarot profile for a single player.
 
-
-class KarmaVector(TypedDict):
-    """Fixed 6-field karma vector per player.
-
-    Each field represents narrative pressure that builds toward resolution.
-    Maps to masks: betrayal→FRIEND, risk→GAMBLER, irony→TRICKSTER,
-    doom→PROPHET, wrath→CHAOS_BRINGER, inevitability→OBSERVER.
+    Players don't spawn with a card - they earn it through actions.
+    The dominant card is their current identity.
     """
 
-    betrayal: int  # FRIEND mask - builds when helping, resolves on betrayal
-    risk: int  # GAMBLER mask - builds on safe bets, resolves on high-stakes
-    irony: int  # TRICKSTER mask - builds on harmless pranks, resolves on dangerous
-    doom: int  # PROPHET mask - builds on unfulfilled prophecies, resolves on reveal
-    wrath: int  # CHAOS_BRINGER mask - builds on restraint, resolves on unleashing
-    inevitability: int  # OBSERVER mask - builds on silence, resolves on speaking
+    dominant_card: str  # "fool", "magician", "hermit", etc.
+    strength: float  # 0-1, how locked into this archetype
+    secondary_card: str | None  # Second-strongest influence
+    weights: dict[str, float]  # All 9 card weights
 
 
-# Default zero vector for new players
-DEFAULT_KARMA: KarmaVector = {
-    "betrayal": 0,
-    "risk": 0,
-    "irony": 0,
-    "doom": 0,
-    "wrath": 0,
-    "inevitability": 0,
-}
+class ErisOpinion(TypedDict):
+    """Eris's subjective opinion of a single player.
+
+    This is not objective truth - it's what Eris believes and feels.
+    """
+
+    trust: float  # -1 (enemy) to 1 (pet)
+    annoyance: float  # 0-1, how irritating
+    interest: float  # 0-1, how much Eris watches them
+    last_interaction: str | None  # What Eris last did to them
+    interaction_count: int  # How many times Eris has acted on them
+
+
+class PlayerProfile(TypedDict):
+    """Complete profile for a player from Eris's perspective."""
+
+    tarot: PlayerTarotProfile
+    opinion: ErisOpinion
+
+
+def create_default_tarot() -> PlayerTarotProfile:
+    """Create default tarot profile for a new player."""
+    return PlayerTarotProfile(
+        dominant_card="fool",  # Everyone starts as Fool
+        strength=0.0,
+        secondary_card=None,
+        weights={},
+    )
+
+
+def create_default_opinion() -> ErisOpinion:
+    """Create default opinion for a new player."""
+    return ErisOpinion(
+        trust=0.0,
+        annoyance=0.0,
+        interest=0.3,  # Base curiosity
+        last_interaction=None,
+        interaction_count=0,
+    )
+
+
+def create_default_profile() -> PlayerProfile:
+    """Create default player profile."""
+    return PlayerProfile(
+        tarot=create_default_tarot(),
+        opinion=create_default_opinion(),
+    )
+
+
+# === Shared TypedDicts ===
 
 
 class PlannedAction(TypedDict):
@@ -81,7 +111,7 @@ class PlannedAction(TypedDict):
 
 
 class MaskConfig(TypedDict):
-    """Rich mask configuration from mask_selector."""
+    """Rich mask configuration from select_mask."""
 
     mask: str  # "TRICKSTER", "PROPHET", etc.
     bias: dict[str, float]  # {"challenge": 0.4, "mercy": 0.2, "dramatic": 0.4}
@@ -92,28 +122,44 @@ class MaskConfig(TypedDict):
 
 
 class DecisionOutput(BaseModel):
-    """Structured output from decision_node using Pydantic for LLM structured output."""
+    """Structured output from decide_should_act using Pydantic for LLM structured output.
 
-    intent: str = Field(description="One of: bless, curse, test, confuse, reveal, lie")
+    v2.0: Now uses Intent enum values (47 options) instead of 6-value ErisIntent.
+    """
+
+    intent: str = Field(
+        description="Intent from intents.py (e.g., 'tempt', 'test', 'protect', 'grief')"
+    )
     targets: list[str] = Field(
-        default_factory=list, description="Player names to target, or empty list for none"
+        default_factory=list, description="Player names to target, or empty list for all"
     )
     escalation: int = Field(
         default=30, ge=0, le=100, description="Escalation level from 0 (subtle) to 100 (dramatic)"
     )
     should_speak: bool = Field(description="Whether Eris should broadcast a message")
-    should_act: bool = Field(description="Whether Eris should take game actions (spawn mobs, effects, etc)")
+    should_act: bool = Field(
+        description="Whether Eris should take game actions (spawn mobs, effects, etc)"
+    )
+    tarot_reasoning: str | None = Field(
+        default=None, description="How the target's tarot influenced this decision"
+    )
 
 
 class ScriptOutput(TypedDict):
-    """Output from agentic_action (scriptwriting node)."""
+    """Output from llm_invoke (narrative generation node)."""
 
     narrative_text: str  # Message to broadcast (if should_speak)
     planned_actions: list[PlannedAction]  # Actions with purposes
 
 
 class ErisState(TypedDict):
-    """Main graph state for the Eris Director agent."""
+    """Main graph state for the Eris Director agent.
+
+    v2.0 - Tarot-driven pipeline:
+    - Replaced player_karmas with player_profiles (tarot + opinion per player)
+    - 7-node pipeline instead of 8
+    - Eris knows each player's tarot card explicitly
+    """
 
     # Core LangGraph messages
     messages: Annotated[list[AnyMessage], add_messages]
@@ -134,33 +180,28 @@ class ErisState(TypedDict):
     # Current run session tracking
     session: dict[str, Any]
 
-    # === Persona State (v1.1 Enhanced) ===
+    # === Persona State ===
     current_mask: ErisMask
-    mask_config: MaskConfig | None  # Rich mask configuration from mask_selector
+    mask_config: MaskConfig | None  # Rich mask configuration from select_mask
 
-    # === Decision & Script Output (v1.1) ===
-    decision: DecisionOutput | None  # Structured decision from decision_node
-    script: ScriptOutput | None  # Script from agentic_action
+    # === Decision & Script Output ===
+    decision: DecisionOutput | None  # Structured decision from decide_should_act
+    script: ScriptOutput | None  # Script from llm_invoke
 
-    # === Fear & Chaos (v1.1 - in-memory, resets per run) ===
+    # === Fear & Chaos (in-memory, resets per run) ===
     player_fear: dict[str, int]  # username -> 0-100 fear level
     player_chaos: dict[str, int]  # username -> chaos contribution
     global_chaos: int  # 0-100 global chaos level
 
-    # === Karma (v1.2 - from PostgreSQL, persists) ===
-    player_karmas: dict[str, KarmaVector]  # username -> KarmaVector (6 fixed fields)
+    # === Player Profiles (v2.0 - replaces player_karmas) ===
+    player_profiles: dict[str, PlayerProfile]  # username -> PlayerProfile (tarot + opinion)
 
-    # === Fracture & Phase (v1.3 - in-memory, resets per run) ===
-    fracture: int  # 0-200+ fracture level (chaos + karma + fear)
+    # === Fracture & Phase (in-memory, resets per run) ===
+    fracture: int  # 0-200+ fracture level (chaos + interest + fear)
     phase: str  # "normal", "rising", "critical", "locked", "apocalypse"
     apocalypse_triggered: bool  # Whether apocalypse event has fired this run
 
-    # === Prophecy State (v1.1 - from PostgreSQL, persists) ===
-    prophecy_state: dict[str, Any]  # Active prophecies, tracking
-
-    # === Output (v1.1 Enhanced) ===
-    # NOTE: planned_actions now lives inside script.planned_actions (single source of truth)
-    # Protection decision reads from script, outputs to approved_actions
+    # === Output ===
     approved_actions: list[PlannedAction]  # Post-protection validation
     protection_warnings: list[str]  # Soft enforcement warnings
 
@@ -186,6 +227,7 @@ def create_initial_state() -> ErisState:
             "actions_taken": [],
             "last_speech_time": 0,
             "intervention_count": 0,
+            "mask_event_count": 0,  # For mask stickiness
         },
         # Persona
         current_mask=ErisMask.TRICKSTER,
@@ -197,15 +239,13 @@ def create_initial_state() -> ErisState:
         player_fear={},
         player_chaos={},
         global_chaos=0,
-        # Karma (loaded from DB)
-        player_karmas={},
+        # Player Profiles (tarot + opinion per player)
+        player_profiles={},
         # Fracture & Phase (in-memory, reset per run)
         fracture=0,
         phase="normal",
         apocalypse_triggered=False,
-        # Prophecy (loaded from DB)
-        prophecy_state={},
-        # Output (planned_actions now lives inside script)
+        # Output
         approved_actions=[],
         protection_warnings=[],
         # Timing

@@ -198,7 +198,7 @@ class ScenarioRunner:
                     "context_buffer": self.short_memory.get_context_string(),
                     "game_state": game_snapshot,
                     "player_histories": {},
-                    "player_karmas": {},
+                    "player_profiles": {},  # v2.0: replaces player_karmas
                     "session": {
                         "run_id": run_id,
                         "events_this_run": graph_outputs,
@@ -574,7 +574,7 @@ class EmergentScenarioRunner:
                         "context_buffer": self.short_memory.get_context_string(),
                         "game_state": game_snapshot,
                         "player_histories": {},
-                        "player_karmas": {},
+                        "player_profiles": {},  # v2.0: replaces player_karmas
                         "session": {
                             "run_id": run_id,
                             "events_this_run": graph_outputs,
