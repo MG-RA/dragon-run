@@ -395,15 +395,28 @@ class FractureTracker:
         """Update total karma from player_karmas state."""
         self.total_karma = karma_sum
 
+    # Karma divisor - prevents karma from dominating fracture calculation
+    # With K=10, 100 total karma adds 10 fracture points
+    KARMA_DIVISOR = 10.0
+
     def calculate_fracture(self) -> int:
         """
         Calculate current fracture level.
-        fracture = global_chaos + total_karma + max_player_fear
+
+        fracture = global_chaos + max_player_fear + (total_karma / K)
+
+        Fracture rises when:
+        - Eris is cruel (chaos increases)
+        - Players panic (fear increases)
+        - Lies pile up (karma accumulates)
         """
         global_chaos = self.tension_manager.get_global_chaos()
         max_fear = max(self.tension_manager.player_fear.values()) if self.tension_manager.player_fear else 0
 
-        fracture = global_chaos + self.total_karma + max_fear
+        # Karma contribution is divided by K to prevent it from dominating
+        karma_contribution = int(self.total_karma / self.KARMA_DIVISOR)
+
+        fracture = global_chaos + max_fear + karma_contribution
         return fracture
 
     def get_phase(self, fracture: Optional[int] = None) -> str:

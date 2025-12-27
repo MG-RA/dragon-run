@@ -14,5 +14,8 @@ psycopg2-binary>=2.9.0
 pyyaml>=6.0
 python-dotenv>=1.0.0
 
+# Observability
+logfire>=2.0.0
+
 # Development
 rich>=13.7.0

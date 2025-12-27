@@ -17,6 +17,10 @@ sys.path.insert(0, str(BASE_DIR))
 # (Ollama sets OLLAMA_HOST=0.0.0.0 which we need to override)
 load_dotenv(BASE_DIR / ".env", override=True)
 
+# Initialize tracing early (before other eris imports)
+from eris.core.tracing import init_tracing
+_tracing_enabled = init_tracing()
+
 
 def setup_logging(log_dir: Path, level: str = "INFO", json_mode: bool = False) -> None:
     """Configure application logging.
@@ -90,6 +94,9 @@ async def main() -> None:
 
     logger = logging.getLogger("eris")
     logger.info("Eris AI Director starting...")
+
+    if _tracing_enabled:
+        logger.info("Logfire tracing enabled")
 
     # Create and run application
     app = ErisApplication(config, BASE_DIR)

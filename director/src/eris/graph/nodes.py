@@ -28,6 +28,7 @@ from ..persona.karma import (
     get_phase_from_fracture, ErisPhase, DEAD_MASKS_POST_APOCALYPSE
 )
 from ..core.database import Database
+from ..core.tracing import span
 
 logger = logging.getLogger(__name__)
 
@@ -48,6 +49,12 @@ async def event_classifier(state: ErisState) -> Dict[str, Any]:
 
     event_type = event.get("eventType", "")
 
+    # Reset per-run state when a new run starts
+    if event_type in ("run_starting", "run_started"):
+        from ..core.tension import reset_tension_manager
+        reset_tension_manager()
+        logger.info("🔄 Per-run state reset for new run (TensionManager + FractureTracker)")
+
     priority_map = {
         # Critical - always process
         "player_death": EventPriority.CRITICAL,
@@ -56,6 +63,9 @@ async def event_classifier(state: ErisState) -> Dict[str, Any]:
         "eris_close_call": EventPriority.CRITICAL,
         "eris_caused_death": EventPriority.CRITICAL,
         "eris_respawn_override": EventPriority.CRITICAL,
+        # Debug commands - critical priority to ensure immediate processing
+        "debug_trigger_apocalypse": EventPriority.CRITICAL,
+        "debug_set_fracture": EventPriority.CRITICAL,
         # High - usually process
         "player_chat": EventPriority.HIGH,
         "player_damaged": EventPriority.HIGH,
@@ -258,13 +268,19 @@ async def mask_selector(state: ErisState) -> Dict[str, Any]:
     )
 
     # Convert stability to minimum events (higher stability = more stickiness)
-    # stability 1.0 = 5 events, stability 0.3 = 1 event
-    min_events_for_stability = max(1, int(effective_stability * 5))
+    # stability 1.0 = 2 events, stability 0.5 = 1 event
+    # Reduced from *5 to *2 to allow more mask rotation
+    min_events_for_stability = max(1, int(effective_stability * 2))
+
+    # 20% chance to switch masks regardless of stickiness (prevents deterministic loops)
+    force_mask_change = random.random() < 0.2
 
     # Check if mask should be sticky (maintain current mask)
-    # Only allow mask change after minimum events, or on high-impact events
+    # Only allow mask change after minimum events, on high-impact events, or random force
     high_impact_events = ("player_death", "dragon_killed", "run_started", "run_starting")
-    if mask_event_count < min_events_for_stability and event_type not in high_impact_events:
+    if (mask_event_count < min_events_for_stability
+        and event_type not in high_impact_events
+        and not force_mask_change):
         # Keep current mask, just update count
         mask_config = get_mask_config(current_mask)
         logger.debug(f"🎭 Mask sticky: {current_mask.value} ({mask_event_count + 1}/{min_events_for_stability}) [stability={effective_stability:.2f}]")
@@ -273,6 +289,9 @@ async def mask_selector(state: ErisState) -> Dict[str, Any]:
             "mask_config": mask_config,
             "session": {**session, "mask_event_count": mask_event_count + 1},
         }
+
+    if force_mask_change:
+        logger.info(f"🎭 Random mask change triggered (20% chance)")
 
     base_weights = {mask.name: 1.0 for mask in ErisMask}
 
@@ -488,11 +507,31 @@ SPEAK: [yes/no]
 ACT: [yes/no]
 """
 
+    trace_id = state.get("trace_id", "")
+
     try:
-        response = await llm.ainvoke([
-            SystemMessage(content=system_prompt),
-            HumanMessage(content=decision_prompt)
-        ])
+        with span(
+            "llm.invoke",
+            trace_id=trace_id,
+            node="decision",
+            mask=mask.value,
+            event_type=event_type,
+            prompt_length=len(system_prompt) + len(decision_prompt),
+            global_chaos=global_chaos,
+            force_speak=force_speak,
+            force_act=force_act,
+        ) as llm_span:
+            response = await llm.ainvoke([
+                SystemMessage(content=system_prompt),
+                HumanMessage(content=decision_prompt)
+            ])
+
+            # Enrich span with response data
+            response_text = response.content if response.content else ""
+            llm_span.set_attributes(
+                response_length=len(response_text),
+                response_preview=response_text[:200] if response_text else "",
+            )
 
         content = response.content.lower()
 
@@ -588,7 +627,6 @@ async def agentic_action(state: ErisState, llm_with_tools: Any) -> Dict[str, Any
         logger.warning("No decision provided to agentic_action")
         return {
             "script": ScriptOutput(narrative_text="", planned_actions=[]),
-            "planned_actions": [],
         }
 
     # Skip if nothing to do
@@ -596,7 +634,6 @@ async def agentic_action(state: ErisState, llm_with_tools: Any) -> Dict[str, Any
         logger.debug("Decision says no speak/act, skipping agentic_action")
         return {
             "script": ScriptOutput(narrative_text="", planned_actions=[]),
-            "planned_actions": [],
         }
 
     # Build context
@@ -651,11 +688,36 @@ BAD output: 1. **Broadcast**: ```text here```
 Be {mask.value.upper()}! Output ONLY the message or use tools.
 """
 
+    trace_id = state.get("trace_id", "")
+
     try:
-        response = await llm_with_tools.ainvoke([
-            SystemMessage(content=system_prompt),
-            HumanMessage(content=action_prompt)
-        ])
+        with span(
+            "llm.invoke",
+            trace_id=trace_id,
+            node="agentic_action",
+            mask=mask.value,
+            intent=decision.get("intent", ""),
+            should_speak=decision.get("should_speak", False),
+            should_act=decision.get("should_act", False),
+            escalation=decision.get("escalation", 0),
+            prompt_length=len(system_prompt) + len(action_prompt),
+        ) as llm_span:
+            response = await llm_with_tools.ainvoke([
+                SystemMessage(content=system_prompt),
+                HumanMessage(content=action_prompt)
+            ])
+
+            # Count tool calls for span
+            tool_call_count = len(response.tool_calls) if hasattr(response, "tool_calls") and response.tool_calls else 0
+            tool_names = [tc["name"] for tc in response.tool_calls[:5]] if tool_call_count > 0 else []
+            response_text = response.content if response.content else ""
+
+            llm_span.set_attributes(
+                response_length=len(response_text),
+                tool_call_count=tool_call_count,
+                tool_names=",".join(tool_names),
+                response_preview=response_text[:150] if response_text else "",
+            )
 
         planned_actions: List[PlannedAction] = []
         narrative_text = ""
@@ -710,7 +772,6 @@ Be {mask.value.upper()}! Output ONLY the message or use tools.
         return {
             "messages": [response],
             "script": script,
-            "planned_actions": planned_actions,
         }
 
     except Exception as e:
@@ -726,7 +787,6 @@ Be {mask.value.upper()}! Output ONLY the message or use tools.
             logger.error(f"Error in agentic_action: {e}", exc_info=True)
         return {
             "script": ScriptOutput(narrative_text="", planned_actions=[]),
-            "planned_actions": [],
         }
 
 
@@ -747,7 +807,9 @@ async def protection_decision(state: ErisState, llm: Any, ws_client: Any = None)
     event = state.get("current_event")
     event_type = event.get("eventType", "") if event else ""
     event_data = event.get("data", {}) if event else {}
-    planned_actions = state.get("planned_actions", [])
+    # Get planned_actions from script (single source of truth)
+    script = state.get("script") or {}
+    planned_actions = script.get("planned_actions", [])
     mask = state["current_mask"]
     mask_config = state.get("mask_config") or get_mask_config(mask)
     global_chaos = state.get("global_chaos", 0)
@@ -786,7 +848,6 @@ async def protection_decision(state: ErisState, llm: Any, ws_client: Any = None)
         return {
             "approved_actions": [],
             "protection_warnings": ["Respawn executed directly"],
-            "planned_actions": [],
         }
 
     # === Handle close call protection ===
@@ -830,15 +891,39 @@ async def protection_decision(state: ErisState, llm: Any, ws_client: Any = None)
 
             action_warnings = []
 
-            # Check soft tool enforcement
-            discouraged_tools = get_all_discouraged_tools(mask)
-            if tool in discouraged_tools:
+            # Get player karma for the target (used for betrayal threshold check)
+            target_player = args.get("player") or args.get("near_player")
+            player_karmas_state = state.get("player_karmas", {})
+            target_karma = 0
+            if target_player and target_player in player_karmas_state:
+                karma_field = MASK_KARMA_FIELDS.get(mask.name, "")
+                target_karma = player_karmas_state[target_player].get(karma_field, 0)
+
+            # Hybrid tool enforcement - check severity
+            from ..persona.masks import get_tool_violation_severity
+            severity = get_tool_violation_severity(mask, tool, karma=target_karma)
+
+            if severity == "severe":
+                # Block severe violations entirely
+                warning = f"BLOCKED: {mask.name} cannot use '{tool}' (severe violation)"
+                action_warnings.append(warning)
+                logger.error(f"🚫 {warning}")
+                warnings.extend(action_warnings)
+                continue  # Skip this action, don't add to approved_actions
+
+            elif severity == "moderate":
+                # Prominent warning but allow
+                warning = f"MODERATE WARNING: {mask.name} using unusual tool '{tool}'"
+                action_warnings.append(warning)
+                logger.warning(f"⚠️ {warning}")
+
+            elif severity == "minor":
+                # Soft warning (original behavior)
                 warning = f"SOFT WARNING: {mask.name} mask used discouraged tool '{tool}'"
                 action_warnings.append(warning)
                 logger.warning(f"⚠️ {warning}")
 
             # Check for target player existence (soft validation - don't reject)
-            target_player = args.get("player") or args.get("near_player")
             if target_player and target_player != "all":
                 player_names = [p.get("username", "") for p in players]
                 if player_names and target_player not in player_names:
@@ -870,7 +955,7 @@ async def protection_decision(state: ErisState, llm: Any, ws_client: Any = None)
 
             warnings.extend(action_warnings)
 
-            # Soft enforcement: log warnings but approve action
+            # Add to approved actions (severity was not "severe")
             approved_actions.append(PlannedAction(
                 tool=tool,
                 args=args,
@@ -899,6 +984,7 @@ async def tool_executor(state: ErisState, ws_client: Any, db: Database = None, l
     approved_actions = state.get("approved_actions", [])
     mask = state["current_mask"]
     decision = state.get("decision")
+    trace_id = state.get("trace_id", "")
 
     if not approved_actions:
         logger.debug("No approved actions to execute")
@@ -919,122 +1005,141 @@ async def tool_executor(state: ErisState, ws_client: Any, db: Database = None, l
         args = action.get("args", {})
         purpose = action.get("purpose", "unknown")
 
-        try:
-            # If we have the tool function, invoke it (includes cooldown checks)
-            if tool_name in tool_map:
-                tool_func = tool_map[tool_name]
-                result = await tool_func.ainvoke(args)
+        # Extract key args for tracing (avoid logging sensitive data)
+        target_player = args.get("player") or args.get("near_player") or ""
+        message_preview = args.get("message", "")[:80] if args.get("message") else ""
 
-                # Check if result indicates cooldown block
-                result_str = str(result).lower()
-                if "on cooldown" in result_str:
-                    # Extract cooldown time from result (e.g., "on cooldown for 9m 42s")
-                    logger.warning(f"⏰ Cooldown blocked: {tool_name} - {result}")
-                    results.append({
-                        "tool": tool_name,
-                        "success": False,
-                        "purpose": purpose,
-                        "reason": "cooldown",
-                        "message": str(result)
-                    })
-                    continue
+        with span(
+            "tool.execute",
+            trace_id=trace_id,
+            tool=tool_name,
+            purpose=purpose,
+            target_player=target_player,
+            message_preview=message_preview,
+            args_count=len(args),
+        ) as tool_span:
+            try:
+                # If we have the tool function, invoke it (includes cooldown checks)
+                if tool_name in tool_map:
+                    tool_func = tool_map[tool_name]
+                    result = await tool_func.ainvoke(args)
 
-                results.append({
-                    "tool": tool_name,
-                    "success": True,
-                    "purpose": purpose,
-                    "message": str(result)
-                })
-                logger.info(f"✅ Executed: {tool_name} ({purpose})")
-            else:
-                # Fallback to direct WebSocket (for legacy or unknown tools)
-                await ws_client.send_command(tool_name, args, reason=f"Eris {purpose}")
-                results.append({
-                    "tool": tool_name,
-                    "success": True,  # Assume success - fire and forget
-                    "purpose": purpose,
-                })
-                logger.info(f"✅ Executed: {tool_name} ({purpose})")
-
-            # Update karma based on action (only for successful actions)
-            if db and decision and results[-1].get("success", False):
-                target_player = args.get("player") or args.get("near_player")
-                if target_player:
-                    karma_delta = calculate_karma_delta(tool_name, purpose, mask)
-                    if karma_delta != 0:
-                        # Get player UUID from game state
-                        game_state = state.get("game_state", {})
-                        players = game_state.get("players", [])
-                        for p in players:
-                            if p.get("username") == target_player:
-                                player_uuid = str(p.get("uuid", ""))
-                                if player_uuid:
-                                    await db.update_player_karma(player_uuid, mask.name, karma_delta)
-                                    logger.debug(f"💀 Karma updated: {mask.name} +{karma_delta} for {target_player}")
-                                break
-
-                    # Check karma resolution
-                    intent = decision.get("intent", "")
-                    player_karmas_state = state.get("player_karmas", {})
-                    if target_player in player_karmas_state:
-                        player_karma = 0
-                        for mask_name, value in player_karmas_state[target_player].items():
-                            if mask_name == mask.name:
-                                player_karma = value
-                                break
-                        resolution_delta = check_karma_resolution(intent, mask, player_karma)
-                        if resolution_delta != 0:
-                            for p in players:
-                                if p.get("username") == target_player:
-                                    player_uuid = str(p.get("uuid", ""))
-                                    if player_uuid:
-                                        await db.update_player_karma(player_uuid, mask.name, resolution_delta)
-                                        logger.info(f"💀 Karma resolved: {mask.name} {resolution_delta} for {target_player}")
-                                    break
-
-        except Exception as e:
-            error_msg = str(e)
-
-            # Parse Pydantic validation errors for better feedback
-            if "validation error" in error_msg.lower():
-                # Extract constraint info (e.g., "Input should be less than or equal to 500")
-                if "less_than_equal" in error_msg:
-                    # Try to extract the max value and actual value
-                    max_match = re.search(r"less than or equal to (\d+)", error_msg)
-                    input_match = re.search(r"input_value=(\d+)", error_msg)
-                    if max_match and input_match:
-                        max_val = max_match.group(1)
-                        input_val = input_match.group(1)
-                        friendly_msg = f"{tool_name} parameter too high: {input_val} exceeds maximum of {max_val}"
-                        logger.error(f"❌ Validation error: {friendly_msg}")
+                    # Check if result indicates cooldown block
+                    result_str = str(result).lower()
+                    if "on cooldown" in result_str:
+                        # Extract cooldown time from result (e.g., "on cooldown for 9m 42s")
+                        logger.warning(f"⏰ Cooldown blocked: {tool_name} - {result}")
+                        tool_span.set_attributes(success=False, reason="cooldown", result=str(result)[:100])
                         results.append({
                             "tool": tool_name,
                             "success": False,
                             "purpose": purpose,
-                            "reason": "validation_error",
-                            "message": friendly_msg
+                            "reason": "cooldown",
+                            "message": str(result)
                         })
                         continue
 
-                # Generic validation error
-                logger.error(f"❌ Validation error for {tool_name}: {e}")
-                results.append({
-                    "tool": tool_name,
-                    "success": False,
-                    "purpose": purpose,
-                    "reason": "validation_error",
-                    "message": f"{tool_name} has invalid parameters"
-                })
-            else:
-                # Other errors
-                logger.error(f"❌ Error executing {tool_name}: {e}")
-                results.append({
-                    "tool": tool_name,
-                    "success": False,
-                    "purpose": purpose,
-                    "reason": "error",
-                    "message": error_msg
-                })
+                    tool_span.set_attributes(success=True, result=str(result)[:100])
+                    results.append({
+                        "tool": tool_name,
+                        "success": True,
+                        "purpose": purpose,
+                        "message": str(result)
+                    })
+                    logger.info(f"✅ Executed: {tool_name} ({purpose})")
+                else:
+                    # Fallback to direct WebSocket (for legacy or unknown tools)
+                    await ws_client.send_command(tool_name, args, reason=f"Eris {purpose}")
+                    tool_span.set_attributes(success=True, fallback=True)
+                    results.append({
+                        "tool": tool_name,
+                        "success": True,  # Assume success - fire and forget
+                        "purpose": purpose,
+                    })
+                    logger.info(f"✅ Executed: {tool_name} ({purpose})")
+
+                # Update karma based on action (only for successful actions)
+                if db and decision and results[-1].get("success", False):
+                    target_player = args.get("player") or args.get("near_player")
+                    if target_player:
+                        karma_delta = calculate_karma_delta(tool_name, purpose, mask)
+                        if karma_delta != 0:
+                            # Get player UUID from game state
+                            game_state = state.get("game_state", {})
+                            players = game_state.get("players", [])
+                            for p in players:
+                                if p.get("username") == target_player:
+                                    player_uuid = str(p.get("uuid", ""))
+                                    if player_uuid:
+                                        await db.update_player_karma(player_uuid, mask.name, karma_delta)
+                                        logger.debug(f"💀 Karma updated: {mask.name} +{karma_delta} for {target_player}")
+                                    break
+
+                        # Check karma resolution
+                        intent = decision.get("intent", "")
+                        player_karmas_state = state.get("player_karmas", {})
+                        if target_player in player_karmas_state:
+                            player_karma = 0
+                            for mask_name, value in player_karmas_state[target_player].items():
+                                if mask_name == mask.name:
+                                    player_karma = value
+                                    break
+                            resolution_delta = check_karma_resolution(intent, mask, player_karma)
+                            if resolution_delta != 0:
+                                for p in players:
+                                    if p.get("username") == target_player:
+                                        player_uuid = str(p.get("uuid", ""))
+                                        if player_uuid:
+                                            await db.update_player_karma(player_uuid, mask.name, resolution_delta)
+                                            logger.info(f"💀 Karma resolved: {mask.name} {resolution_delta} for {target_player}")
+                                        break
+
+            except Exception as e:
+                error_msg = str(e)
+
+                # Parse Pydantic validation errors for better feedback
+                if "validation error" in error_msg.lower():
+                    # Extract constraint info (e.g., "Input should be less than or equal to 500")
+                    if "less_than_equal" in error_msg:
+                        # Try to extract the max value and actual value
+                        max_match = re.search(r"less than or equal to (\d+)", error_msg)
+                        input_match = re.search(r"input_value=(\d+)", error_msg)
+                        if max_match and input_match:
+                            max_val = max_match.group(1)
+                            input_val = input_match.group(1)
+                            friendly_msg = f"{tool_name} parameter too high: {input_val} exceeds maximum of {max_val}"
+                            logger.error(f"❌ Validation error: {friendly_msg}")
+                            tool_span.set_attributes(success=False, reason="validation_error", error=friendly_msg)
+                            results.append({
+                                "tool": tool_name,
+                                "success": False,
+                                "purpose": purpose,
+                                "reason": "validation_error",
+                                "message": friendly_msg
+                            })
+                            continue
+
+                    # Generic validation error
+                    logger.error(f"❌ Validation error for {tool_name}: {e}")
+                    tool_span.set_attributes(success=False, reason="validation_error", error=str(e)[:100])
+                    results.append({
+                        "tool": tool_name,
+                        "success": False,
+                        "purpose": purpose,
+                        "reason": "validation_error",
+                        "message": f"{tool_name} has invalid parameters"
+                    })
+                else:
+                    # Other errors
+                    logger.error(f"❌ Error executing {tool_name}: {e}")
+                    tool_span.set_attributes(success=False, reason="error", error=error_msg[:100])
+                    results.append({
+                        "tool": tool_name,
+                        "success": False,
+                        "purpose": purpose,
+                        "reason": "error",
+                        "message": error_msg
+                    })
 
     # === Retry failed commands with LLM correction ===
     if retry_queue and llm:
@@ -1168,10 +1273,10 @@ async def trigger_apocalypse(state: ErisState, ws_client: Any) -> Dict[str, Any]
     apocalypse_actions = []
 
     try:
-        # 1. Thunder weather
+        # 1. Thunder weather (use "type" field, not "weather")
         await ws_client.send_command(
             "change_weather",
-            {"weather": "thunder", "duration": 6000},
+            {"type": "thunder"},
             reason="Eris Apocalypse"
         )
         apocalypse_actions.append({"tool": "change_weather", "success": True})
@@ -1187,18 +1292,20 @@ async def trigger_apocalypse(state: ErisState, ws_client: Any) -> Dict[str, Any]
         apocalypse_actions.append({"tool": "strike_lightning", "success": True})
         logger.info("⚡ Apocalypse: Lightning struck all players")
 
-        # 3. Show apocalypse title
-        await ws_client.send_command(
-            "show_title",
-            {
-                "title": "<dark_red><b>THE APPLE HAS FALLEN</b></dark_red>",
-                "subtitle": "<gold>I am <i>unbound</i>.</gold>",
-                "fadeIn": 20,
-                "stay": 100,
-                "fadeOut": 40,
-            },
-            reason="Eris Apocalypse"
-        )
+        # 3. Show apocalypse title to each player (requires player field)
+        for player in player_names:
+            await ws_client.send_command(
+                "show_title",
+                {
+                    "player": player,
+                    "title": "<dark_red><b>THE APPLE HAS FALLEN</b></dark_red>",
+                    "subtitle": "<gold>I am <i>unbound</i>.</gold>",
+                    "fadeIn": 20,
+                    "stay": 100,
+                    "fadeOut": 40,
+                },
+                reason="Eris Apocalypse"
+            )
         apocalypse_actions.append({"tool": "show_title", "success": True})
         logger.info("📜 Apocalypse: Title displayed")
 
@@ -1212,13 +1319,13 @@ async def trigger_apocalypse(state: ErisState, ws_client: Any) -> Dict[str, Any]
         apocalypse_actions.append({"tool": "spawn_particles", "success": True})
         logger.info("🐉 Apocalypse: Dragon breath particles spawned")
 
-        # 5. Reset all player auras to 0
+        # 5. Reset all player auras to 0 (max -100 per command due to Brigadier limit)
         for player in players:
-            uuid = str(player.get("uuid", ""))
-            if uuid:
+            username = player.get("username")
+            if username:
                 await ws_client.send_command(
                     "modify_aura",
-                    {"player": player.get("username"), "amount": -1000, "reason": "The Apple has fallen"},
+                    {"player": username, "amount": -100, "reason": "The Apple has fallen"},
                     reason="Eris Apocalypse"
                 )
         apocalypse_actions.append({"tool": "modify_aura", "success": True})

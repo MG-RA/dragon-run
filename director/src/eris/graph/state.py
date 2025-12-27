@@ -43,6 +43,33 @@ class ErisIntent(Enum):
 
 # === New TypedDicts for v1.1 ===
 
+class KarmaVector(TypedDict):
+    """Fixed 6-field karma vector per player.
+
+    Each field represents narrative pressure that builds toward resolution.
+    Maps to masks: betrayal→FRIEND, risk→GAMBLER, irony→TRICKSTER,
+    doom→PROPHET, wrath→CHAOS_BRINGER, inevitability→OBSERVER.
+    """
+
+    betrayal: int       # FRIEND mask - builds when helping, resolves on betrayal
+    risk: int           # GAMBLER mask - builds on safe bets, resolves on high-stakes
+    irony: int          # TRICKSTER mask - builds on harmless pranks, resolves on dangerous
+    doom: int           # PROPHET mask - builds on unfulfilled prophecies, resolves on reveal
+    wrath: int          # CHAOS_BRINGER mask - builds on restraint, resolves on unleashing
+    inevitability: int  # OBSERVER mask - builds on silence, resolves on speaking
+
+
+# Default zero vector for new players
+DEFAULT_KARMA: KarmaVector = {
+    "betrayal": 0,
+    "risk": 0,
+    "irony": 0,
+    "doom": 0,
+    "wrath": 0,
+    "inevitability": 0,
+}
+
+
 class PlannedAction(TypedDict):
     """A single planned action with purpose annotation."""
 
@@ -115,7 +142,7 @@ class ErisState(TypedDict):
     global_chaos: int                      # 0-100 global chaos level
 
     # === Karma (v1.2 - from PostgreSQL, persists) ===
-    player_karmas: Dict[str, Dict[str, int]]  # username -> {mask_type -> karma value}
+    player_karmas: Dict[str, KarmaVector]     # username -> KarmaVector (6 fixed fields)
 
     # === Fracture & Phase (v1.3 - in-memory, resets per run) ===
     fracture: int                          # 0-200+ fracture level (chaos + karma + fear)
@@ -126,12 +153,16 @@ class ErisState(TypedDict):
     prophecy_state: Dict[str, Any]         # Active prophecies, tracking
 
     # === Output (v1.1 Enhanced) ===
-    planned_actions: List[PlannedAction]   # Now includes purpose field
+    # NOTE: planned_actions now lives inside script.planned_actions (single source of truth)
+    # Protection decision reads from script, outputs to approved_actions
     approved_actions: List[PlannedAction]  # Post-protection validation
     protection_warnings: List[str]         # Soft enforcement warnings
 
     # Timing
     timestamp: float
+
+    # Tracing
+    trace_id: Optional[str]  # Unique ID for correlating this event through pipeline
 
 
 def create_initial_state() -> ErisState:
@@ -168,10 +199,11 @@ def create_initial_state() -> ErisState:
         apocalypse_triggered=False,
         # Prophecy (loaded from DB)
         prophecy_state={},
-        # Output
-        planned_actions=[],
+        # Output (planned_actions now lives inside script)
         approved_actions=[],
         protection_warnings=[],
         # Timing
-        timestamp=datetime.now().timestamp()
+        timestamp=datetime.now().timestamp(),
+        # Tracing
+        trace_id=None,
     )

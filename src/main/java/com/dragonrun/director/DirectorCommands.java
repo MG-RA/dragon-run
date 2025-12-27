@@ -444,6 +444,22 @@ public class DirectorCommands {
                         )
                     )
                 )
+                .then(Commands.literal("debug")
+                    .requires(source -> source.getSender().hasPermission("dragonrun.admin"))
+                    .then(Commands.literal("apocalypse")
+                        .executes(ctx -> {
+                            return executeDebugApocalypse(ctx.getSource());
+                        })
+                    )
+                    .then(Commands.literal("fracture")
+                        .then(Commands.argument("level", IntegerArgumentType.integer(0, 300))
+                            .executes(ctx -> {
+                                int level = IntegerArgumentType.getInteger(ctx, "level");
+                                return executeDebugSetFracture(ctx.getSource(), level);
+                            })
+                        )
+                    )
+                )
                 .build(),
             "Director AI commands",
             java.util.List.of()
@@ -1440,5 +1456,38 @@ public class DirectorCommands {
 
         // Schedule next countdown
         Bukkit.getScheduler().runTaskLater(plugin, () -> showRespawnCountdown(player, seconds - 1), 20L);
+    }
+
+    // ==================== DEBUG COMMANDS ====================
+
+    private int executeDebugApocalypse(CommandSourceStack source) {
+        if (plugin.getDirectorServer() == null) {
+            source.getSender().sendMessage(Component.text("Director WebSocket not connected", NamedTextColor.RED));
+            return 0;
+        }
+
+        // Send debug event to Python to trigger apocalypse
+        com.google.gson.JsonObject data = new com.google.gson.JsonObject();
+        data.addProperty("source", "debug_command");
+        plugin.getDirectorServer().broadcastEvent("debug_trigger_apocalypse", data);
+
+        source.getSender().sendMessage(Component.text("🍎 DEBUG: Sent apocalypse trigger event to Director", NamedTextColor.GOLD));
+        return 1;
+    }
+
+    private int executeDebugSetFracture(CommandSourceStack source, int level) {
+        if (plugin.getDirectorServer() == null) {
+            source.getSender().sendMessage(Component.text("Director WebSocket not connected", NamedTextColor.RED));
+            return 0;
+        }
+
+        // Send debug event to Python to set fracture level
+        com.google.gson.JsonObject data = new com.google.gson.JsonObject();
+        data.addProperty("fracture", level);
+        data.addProperty("source", "debug_command");
+        plugin.getDirectorServer().broadcastEvent("debug_set_fracture", data);
+
+        source.getSender().sendMessage(Component.text("🔧 DEBUG: Set fracture level to " + level, NamedTextColor.GOLD));
+        return 1;
     }
 }

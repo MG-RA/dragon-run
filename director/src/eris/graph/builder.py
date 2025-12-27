@@ -74,8 +74,38 @@ def create_graph(
         """
         Calculate fracture level and check for phase transitions/apocalypse.
         This node updates fracture, phase, and may trigger apocalypse.
+
+        Also handles debug commands:
+        - debug_trigger_apocalypse: Force apocalypse trigger
+        - debug_set_fracture: Set fracture to specific level
         """
         fracture_tracker = get_fracture_tracker()
+
+        # Check for debug commands first
+        event = s.get("current_event", {})
+        event_type = event.get("eventType", "") if event else ""
+
+        if event_type == "debug_trigger_apocalypse":
+            logger.warning("🍎 DEBUG: Forcing apocalypse trigger!")
+            apocalypse_result = await trigger_apocalypse(s, ws_client)
+            fracture_tracker.mark_apocalypse_triggered()
+            return {
+                "fracture": 200,
+                "phase": "apocalypse",
+                "apocalypse_triggered": True,
+                **apocalypse_result,
+            }
+
+        if event_type == "debug_set_fracture":
+            target_fracture = event.get("data", {}).get("fracture", 100)
+            logger.warning(f"🔧 DEBUG: Setting fracture to {target_fracture}")
+            # Hack: set total_karma to achieve desired fracture
+            # fracture = chaos + fear + karma/10, so karma = (fracture - chaos - fear) * 10
+            chaos = fracture_tracker.tension_manager.get_global_chaos()
+            fear = max(fracture_tracker.tension_manager.player_fear.values()) if fracture_tracker.tension_manager.player_fear else 0
+            required_karma = max(0, (target_fracture - chaos - fear) * 10)
+            fracture_tracker.update_total_karma(required_karma)
+            return fracture_tracker.get_state_for_graph()
 
         # Update total karma from state
         player_karmas = s.get("player_karmas", {})
@@ -177,7 +207,7 @@ def create_graph_for_studio():
         }
 
     async def test_action(state):
-        return {"planned_actions": [], "script": {"narrative_text": "", "planned_actions": []}}
+        return {"script": {"narrative_text": "", "planned_actions": []}}
 
     async def test_protection(state):
         return {"approved_actions": [], "protection_warnings": []}

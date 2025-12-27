@@ -114,13 +114,75 @@ MASK_TOOL_GROUPS: Dict[str, Dict[str, List[str]]] = {
 # Maps each mask to its karma type for the karma vector system
 
 MASK_KARMA_FIELDS: Dict[str, str] = {
-    "TRICKSTER": "prank_karma",
-    "PROPHET": "doom_karma",
-    "FRIEND": "betrayal_karma",
-    "CHAOS_BRINGER": "wrath_karma",
-    "OBSERVER": "silence_karma",
-    "GAMBLER": "risk_karma",
+    "TRICKSTER": "irony",         # Renamed from prank_karma
+    "PROPHET": "doom",            # Renamed from doom_karma
+    "FRIEND": "betrayal",         # Renamed from betrayal_karma
+    "CHAOS_BRINGER": "wrath",     # Renamed from wrath_karma
+    "OBSERVER": "inevitability",  # Renamed from silence_karma
+    "GAMBLER": "risk",            # Renamed from risk_karma
 }
+
+
+# === Tool Severity for Hybrid Enforcement ===
+# Maps tool groups to per-mask severity levels: "severe" (block), "moderate" (warn), "minor" (soft)
+# Tools not listed default to "minor" if in discouraged list, "none" otherwise
+
+TOOL_SEVERITY: Dict[str, Dict[str, str]] = {
+    # Healing/protection tools
+    "heal_player": {
+        "CHAOS_BRINGER": "severe",  # CHAOS_BRINGER healing is completely out of character
+    },
+    "protect_player": {
+        "CHAOS_BRINGER": "severe",
+    },
+    "rescue_teleport": {
+        "CHAOS_BRINGER": "severe",
+    },
+    # Damage tools
+    "damage_player": {
+        "FRIEND": "severe",  # FRIEND damaging is severe (unless betrayal_karma >= 50)
+        "OBSERVER": "moderate",  # OBSERVER damaging is unusual
+    },
+    # Mob spawning
+    "spawn_mob": {
+        "FRIEND": "moderate",  # FRIEND spawning mobs is unusual
+        "OBSERVER": "moderate",
+    },
+    # Hazards
+    "spawn_tnt": {
+        "FRIEND": "severe",
+        "OBSERVER": "severe",
+    },
+}
+
+
+def get_tool_violation_severity(mask: ErisMask, tool: str, karma: int = 0) -> str:
+    """
+    Get violation severity for a tool used by a mask.
+
+    Returns:
+        "none" - Tool is allowed, no violation
+        "minor" - Soft warning only (current behavior)
+        "moderate" - Prominent warning, but allow
+        "severe" - Block the action entirely
+
+    Special case: FRIEND can damage after betrayal_karma >= 50 (betrayal happening)
+    """
+    discouraged = get_all_discouraged_tools(mask)
+
+    # If not in discouraged list, no violation
+    if tool not in discouraged:
+        return "none"
+
+    # Check for specific severity override
+    tool_severities = TOOL_SEVERITY.get(tool, {})
+    severity = tool_severities.get(mask.name, "minor")
+
+    # Special case: FRIEND can damage after betrayal threshold
+    if mask.name == "FRIEND" and tool == "damage_player" and karma >= 50:
+        return "minor"  # Betrayal is happening, allow it with soft warning
+
+    return severity
 
 
 # === Base Mask Traits ===

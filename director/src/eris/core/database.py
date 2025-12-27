@@ -5,6 +5,8 @@ from typing import Dict, Optional
 
 import asyncpg
 
+from .tracing import span
+
 logger = logging.getLogger(__name__)
 
 
@@ -56,15 +58,16 @@ class Database:
         FROM players p
         WHERE p.uuid = $1
         """
-        try:
-            async with self.pool.acquire() as conn:
-                row = await conn.fetchrow(query, uuid)
-                if row:
-                    return dict(row)
+        with span("db.query", query="player_summary", player_uuid=uuid[:8]):
+            try:
+                async with self.pool.acquire() as conn:
+                    row = await conn.fetchrow(query, uuid)
+                    if row:
+                        return dict(row)
+                    return {}
+            except Exception as e:
+                logger.error(f"Error fetching player summary: {e}")
                 return {}
-        except Exception as e:
-            logger.error(f"Error fetching player summary: {e}")
-            return {}
 
     async def get_player_nemesis(self, uuid: str) -> Optional[str]:
         """Get what kills this player most often."""
@@ -277,19 +280,20 @@ class Database:
         FROM eris_betrayal_debt
         WHERE player_uuid = ANY($1)
         """
-        try:
-            async with self.pool.acquire() as conn:
-                rows = await conn.fetch(query, uuids)
-                result: Dict[str, Dict[str, int]] = {}
-                for row in rows:
-                    player_uuid = row["player_uuid"]
-                    if player_uuid not in result:
-                        result[player_uuid] = {}
-                    result[player_uuid][row["mask_type"]] = row["debt_value"]
-                return result
-        except Exception as e:
-            logger.error(f"Error fetching all player karmas: {e}")
-            return {}
+        with span("db.query", query="all_player_karmas", player_count=len(uuids)):
+            try:
+                async with self.pool.acquire() as conn:
+                    rows = await conn.fetch(query, uuids)
+                    result: Dict[str, Dict[str, int]] = {}
+                    for row in rows:
+                        player_uuid = row["player_uuid"]
+                        if player_uuid not in result:
+                            result[player_uuid] = {}
+                        result[player_uuid][row["mask_type"]] = row["debt_value"]
+                    return result
+            except Exception as e:
+                logger.error(f"Error fetching all player karmas: {e}")
+                return {}
 
     # Backwards compatibility aliases
     async def get_betrayal_debts(self, uuid: str) -> Dict[str, int]:
@@ -383,24 +387,25 @@ class Database:
         WHERE player_uuid = ANY($1) AND is_fulfilled = FALSE
         ORDER BY created_at DESC
         """
-        try:
-            async with self.pool.acquire() as conn:
-                rows = await conn.fetch(query, uuids)
-                result: Dict[str, list] = {}
-                for row in rows:
-                    player_uuid = row["player_uuid"]
-                    if player_uuid not in result:
-                        result[player_uuid] = []
-                    result[player_uuid].append({
-                        "id": row["id"],
-                        "text": row["prophecy_text"],
-                        "type": row["prophecy_type"],
-                        "created_at": row["created_at"],
-                    })
-                return result
-        except Exception as e:
-            logger.error(f"Error fetching all active prophecies: {e}")
-            return {}
+        with span("db.query", query="all_active_prophecies", player_count=len(uuids)):
+            try:
+                async with self.pool.acquire() as conn:
+                    rows = await conn.fetch(query, uuids)
+                    result: Dict[str, list] = {}
+                    for row in rows:
+                        player_uuid = row["player_uuid"]
+                        if player_uuid not in result:
+                            result[player_uuid] = []
+                        result[player_uuid].append({
+                            "id": row["id"],
+                            "text": row["prophecy_text"],
+                            "type": row["prophecy_type"],
+                            "created_at": row["created_at"],
+                        })
+                    return result
+            except Exception as e:
+                logger.error(f"Error fetching all active prophecies: {e}")
+                return {}
 
     # === Run State Methods (v1.1) ===
 

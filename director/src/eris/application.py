@@ -17,6 +17,7 @@ from eris.config import ErisConfig
 from eris.core.database import Database
 from eris.core.event_processor import EventProcessor
 from eris.core.memory import LongTermMemory, ShortTermMemory
+from eris.core.tracing import generate_trace_id, span
 from eris.core.websocket import GameStateClient
 from eris.graph.builder import create_graph
 from eris.graph.state import ErisMask, EventPriority
@@ -347,64 +348,99 @@ class ErisApplication:
     async def _on_event(self, data: dict, is_idle_check: bool = False) -> None:
         """Handle game events by processing through the LangGraph."""
         event_type = data.get("eventType", "unknown")
+        trace_id = generate_trace_id()
 
         event_data = {
             "eventType": event_type,
             "data": data.get("data", {})
         }
 
-        logger.info(f"Event: {event_type}")
+        # Extract player info for tracing
+        event_player = data.get("data", {}).get("player", data.get("data", {}).get("username", ""))
+        game_state_name = self.game_context.state.get("gameState", "UNKNOWN")
+        player_count = len(self.game_context.state.get("players", []))
 
-        # Add to event processor queue
-        queued = await self.services.event_processor.add_event(event_data)
+        with span(
+            "event.process",
+            trace_id=trace_id,
+            event_type=event_type,
+            player=event_player,
+            game_state=game_state_name,
+            player_count=player_count,
+            is_idle_check=is_idle_check,
+        ):
+            logger.info(f"Event: {event_type} [trace:{trace_id}]")
 
-        if not queued:
-            return
+            # Add to event processor queue
+            queued = await self.services.event_processor.add_event(event_data)
 
-        # Add to short-term memory
-        self.services.short_memory.add_event(event_data)
+            if not queued:
+                return
 
-        # Build initial state for graph invocation
-        initial_state = {
-            "messages": [],
-            "current_event": event_data,
-            "event_priority": EventPriority.ROUTINE,
-            "context_buffer": self.services.short_memory.get_context_string(),
-            "game_state": self.game_context.state,
-            "player_histories": {},
-            "session": {
-                "run_id": None,
-                "events_this_run": [],
-                "actions_taken": [],
-                "last_speech_time": 0,
-                "intervention_count": 0
-            },
-            "current_mask": ErisMask.TRICKSTER,
-            "mask_stability": self.config.eris.mask_stability,
-            "mood": "neutral",
-            "should_speak": False,
-            "should_intervene": False,
-            "intervention_type": None,
-            "planned_actions": [],
-            "timestamp": 0.0,
-        }
+            # Add to short-term memory
+            self.services.short_memory.add_event(event_data)
 
-        # Invoke the graph with timeout
-        try:
-            logger.info(f"Processing event: {event_type}")
+            # Build initial state for graph invocation
+            initial_state = {
+                "messages": [],
+                "current_event": event_data,
+                "event_priority": EventPriority.ROUTINE,
+                "context_buffer": self.services.short_memory.get_context_string(),
+                "game_state": self.game_context.state,
+                "player_histories": {},
+                "session": {
+                    "run_id": None,
+                    "events_this_run": [],
+                    "actions_taken": [],
+                    "last_speech_time": 0,
+                    "intervention_count": 0
+                },
+                "current_mask": ErisMask.TRICKSTER,
+                "mask_stability": self.config.eris.mask_stability,
+                "mood": "neutral",
+                "should_speak": False,
+                "should_intervene": False,
+                "intervention_type": None,
+                "planned_actions": [],
+                "timestamp": 0.0,
+                "trace_id": trace_id,
+            }
 
-            result = await asyncio.wait_for(
-                self.services.graph.ainvoke(initial_state),
-                timeout=self.config.graph.invoke_timeout
-            )
+            # Invoke the graph with timeout
+            try:
+                with span("graph.invoke", trace_id=trace_id, timeout=self.config.graph.invoke_timeout) as graph_span:
+                    logger.info(f"Processing event: {event_type} [trace:{trace_id}]")
 
-            logger.info(f"Graph completed for: {event_type}")
+                    result = await asyncio.wait_for(
+                        self.services.graph.ainvoke(initial_state),
+                        timeout=self.config.graph.invoke_timeout
+                    )
 
-            # Track intervention time if Eris spoke or intervened
-            if result.get("should_speak") or result.get("should_intervene"):
-                self.game_context.last_intervention_time = asyncio.get_event_loop().time()
+                    # Enrich span with result data
+                    decision = result.get("decision") or {}
+                    script = result.get("script") or {}
+                    approved_actions = result.get("approved_actions") or []
+                    graph_span.set_attributes(
+                        mask=result.get("current_mask", "").value if hasattr(result.get("current_mask", ""), "value") else str(result.get("current_mask", "")),
+                        phase=result.get("phase", ""),
+                        fracture=result.get("fracture", 0),
+                        intent=decision.get("intent", ""),
+                        should_speak=decision.get("should_speak", False),
+                        should_act=decision.get("should_act", False),
+                        escalation=decision.get("escalation", 0),
+                        targets=",".join(decision.get("targets", [])),
+                        narrative=script.get("narrative_text", "")[:100] if script.get("narrative_text") else "",
+                        actions_planned=len(script.get("planned_actions", [])),
+                        actions_approved=len(approved_actions),
+                    )
 
-        except asyncio.TimeoutError:
-            logger.error(f"Graph timeout after {self.config.graph.invoke_timeout}s for: {event_type}")
-        except Exception as e:
-            logger.error(f"Graph error: {e}", exc_info=True)
+                    logger.info(f"Graph completed for: {event_type} [trace:{trace_id}]")
+
+                    # Track intervention time if Eris spoke or intervened
+                    if result.get("should_speak") or result.get("should_intervene"):
+                        self.game_context.last_intervention_time = asyncio.get_event_loop().time()
+
+            except asyncio.TimeoutError:
+                logger.error(f"Graph timeout after {self.config.graph.invoke_timeout}s for: {event_type} [trace:{trace_id}]")
+            except Exception as e:
+                logger.error(f"Graph error: {e} [trace:{trace_id}]", exc_info=True)

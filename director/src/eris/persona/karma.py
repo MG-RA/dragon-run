@@ -28,65 +28,67 @@ KARMA_MAX = 100       # Maximum karma value
 KARMA_BOOST_FACTOR = 0.5  # Max 50% boost at threshold
 
 # How much karma increases per action type
+# Keys match KarmaVector fields: betrayal, risk, irony, doom, wrath, inevitability
 KARMA_ACCUMULATION = {
-    # FRIEND accumulates betrayal_karma when being helpful
-    "betrayal_karma": {
+    # FRIEND accumulates betrayal when being helpful
+    "betrayal": {
         "heal_player": 8,
         "protect_player": 10,
         "give_item": 5,
         "apply_effect_positive": 6,
     },
-    # GAMBLER accumulates risk_karma when playing safe
-    "risk_karma": {
+    # GAMBLER accumulates risk when playing safe
+    "risk": {
         "safe_gamble": 10,  # When gamble has low stakes
         "refused_bet": 15,  # When player declines and Eris doesn't punish
     },
-    # TRICKSTER accumulates prank_karma with harmless pranks
-    "prank_karma": {
+    # TRICKSTER accumulates irony with harmless pranks
+    "irony": {
         "fake_death": 5,
         "teleport_player": 3,
         "harmless_scare": 4,
     },
-    # PROPHET accumulates doom_karma with unfulfilled prophecies
-    "doom_karma": {
+    # PROPHET accumulates doom with unfulfilled prophecies
+    "doom": {
         "prophecy_made": 15,
         "prophecy_unfulfilled": 10,  # Per minute prophecy remains unfulfilled
     },
-    # CHAOS_BRINGER accumulates wrath_karma when restrained
-    "wrath_karma": {
+    # CHAOS_BRINGER accumulates wrath when restrained
+    "wrath": {
         "restrained_action": 10,  # When chaos is high but Eris backs off
         "mercy_shown": 15,
     },
-    # OBSERVER accumulates silence_karma while watching
-    "silence_karma": {
+    # OBSERVER accumulates inevitability while watching
+    "inevitability": {
         "silent_observation": 2,  # Per event observed without action
         "withheld_judgment": 5,
     },
 }
 
 # How karma resets when resolved
+# Keys match KarmaVector fields
 KARMA_RESOLUTION = {
-    "betrayal_karma": {
+    "betrayal": {
         "triggered_by": ["curse", "test"],  # FRIEND betrays
         "reset_amount": 40,  # How much to reduce after betrayal
     },
-    "risk_karma": {
+    "risk": {
         "triggered_by": ["test"],  # GAMBLER forces high-stakes
         "reset_amount": 35,
     },
-    "prank_karma": {
+    "irony": {
         "triggered_by": ["test", "confuse"],  # TRICKSTER does dangerous prank
         "reset_amount": 30,
     },
-    "doom_karma": {
+    "doom": {
         "triggered_by": ["reveal"],  # PROPHET fulfills prophecy
         "reset_amount": 50,
     },
-    "wrath_karma": {
+    "wrath": {
         "triggered_by": ["curse"],  # CHAOS_BRINGER unleashes
         "reset_amount": 45,
     },
-    "silence_karma": {
+    "inevitability": {
         "triggered_by": ["reveal", "curse"],  # OBSERVER finally speaks/acts
         "reset_amount": 40,
     },
@@ -300,6 +302,10 @@ def select_intent_weighted(weights: Dict[str, float]) -> str:
     return random.choices(intents, weights=probs, k=1)[0]
 
 
+# Base karma added per action (ensures karma always grows)
+BASE_KARMA_PER_ACTION = 2
+
+
 def calculate_karma_delta(
     action_tool: str,
     action_purpose: str,
@@ -314,12 +320,13 @@ def calculate_karma_delta(
         mask: The mask performing the action
 
     Returns:
-        Karma delta (positive = increase, negative = resolution)
+        Karma delta (positive = increase). Always returns at least BASE_KARMA_PER_ACTION
+        to ensure karma accumulates over time.
     """
-    karma_field = MASK_KARMA_FIELDS.get(mask.name, "generic_karma")
+    karma_field = MASK_KARMA_FIELDS.get(mask.name, "generic")
     accumulation = KARMA_ACCUMULATION.get(karma_field, {})
 
-    # Check for specific tool accumulation
+    # Check for specific tool accumulation (higher values)
     if action_tool in accumulation:
         return accumulation[action_tool]
 
@@ -336,7 +343,9 @@ def calculate_karma_delta(
         if keyword in action_purpose.lower():
             return delta
 
-    return 0  # No karma change
+    # Base accumulation: ANY action by a mask adds small karma
+    # This ensures karma always grows over time, preventing narrative stagnation
+    return BASE_KARMA_PER_ACTION
 
 
 def check_karma_resolution(
@@ -382,28 +391,29 @@ def get_karma_narrative_hint(mask: ErisMask, karma: int) -> Optional[str]:
     karma_field = MASK_KARMA_FIELDS.get(mask.name, "generic_karma")
     pressure = min(karma / KARMA_MAX, 1.0)
 
+    # Keys match KarmaVector fields
     hints = {
-        "betrayal_karma": (
+        "betrayal": (
             f"You have been too kind. The karma weighs on you (pressure: {pressure:.0%}). "
             "The time for betrayal approaches..."
         ),
-        "risk_karma": (
+        "risk": (
             f"You have played too safe. Fortune demands balance (pressure: {pressure:.0%}). "
             "Force a high-stakes gamble..."
         ),
-        "prank_karma": (
+        "irony": (
             f"Your pranks have been too harmless (pressure: {pressure:.0%}). "
             "Time for a prank with real consequences..."
         ),
-        "doom_karma": (
+        "doom": (
             f"Your prophecies remain unfulfilled (pressure: {pressure:.0%}). "
             "The threads demand resolution. Make doom manifest..."
         ),
-        "wrath_karma": (
+        "wrath": (
             f"You have held back too long (pressure: {pressure:.0%}). "
             "The wrath must be unleashed. NO MERCY."
         ),
-        "silence_karma": (
+        "inevitability": (
             f"You have watched in silence long enough (pressure: {pressure:.0%}). "
             "Speak. Judge. Act. Your words carry weight now..."
         ),
