@@ -10,6 +10,7 @@ No more fast paths or conditional routing.
 import asyncio
 import random
 import logging
+import re
 from datetime import datetime
 from typing import Any, Dict, List, Optional
 
@@ -998,7 +999,6 @@ async def tool_executor(state: ErisState, ws_client: Any, db: Database = None, l
             if "validation error" in error_msg.lower():
                 # Extract constraint info (e.g., "Input should be less than or equal to 500")
                 if "less_than_equal" in error_msg:
-                    import re
                     # Try to extract the max value and actual value
                     max_match = re.search(r"less than or equal to (\d+)", error_msg)
                     input_match = re.search(r"input_value=(\d+)", error_msg)
@@ -1042,10 +1042,30 @@ async def tool_executor(state: ErisState, ws_client: Any, db: Database = None, l
         retry_results = await _retry_failed_commands(retry_queue, llm, ws_client, mask)
         results.extend(retry_results)
 
+    # === Log execution summary ===
+    success_count = sum(1 for r in results if r.get("success", False))
+    failed_count = len(results) - success_count
+
+    if failed_count > 0:
+        failures_by_reason = {}
+        for r in results:
+            if not r.get("success", False):
+                reason = r.get("reason", "unknown")
+                msg = r.get("message", "")
+                if reason not in failures_by_reason:
+                    failures_by_reason[reason] = []
+                failures_by_reason[reason].append(f"{r['tool']}: {msg}")
+
+        logger.warning(f"⚠️ Tool execution: {success_count} succeeded, {failed_count} failed")
+        for reason, messages in failures_by_reason.items():
+            logger.warning(f"   {reason.upper()}: {', '.join(messages)}")
+    else:
+        logger.info(f"✅ Tool execution: {success_count}/{len(results)} succeeded")
+
     # Update session
     session = state.get("session", {}).copy()
     session["actions_taken"] = session.get("actions_taken", []) + results
-    session["intervention_count"] = session.get("intervention_count", 0) + len(results)
+    session["intervention_count"] = session.get("intervention_count", 0) + success_count  # Only count successful actions
 
     return {"session": session}
 
