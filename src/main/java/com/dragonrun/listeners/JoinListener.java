@@ -62,8 +62,8 @@ public class JoinListener implements Listener {
                 boolean wasParticipating = plugin.getRunManager().isActiveParticipant(player.getUniqueId());
 
                 if (wasParticipating) {
-                    // Returning player - restore to survival mode
-                    plugin.getWorldManager().teleportToHardcore(player);
+                    // Returning player - teleport WITHOUT clearing inventory
+                    plugin.getWorldManager().teleportToHardcoreReturning(player);
                     player.setGameMode(GameMode.SURVIVAL);
                     player.sendMessage(MessageUtil.info("Welcome back! You've been restored to the run."));
                 } else if (plugin.getConfig().getBoolean("spectator.enabled", true)) {

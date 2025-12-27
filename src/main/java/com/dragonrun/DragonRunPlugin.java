@@ -21,6 +21,7 @@ import com.dragonrun.managers.ScoreboardManager;
 import com.dragonrun.managers.VoteManager;
 import com.dragonrun.managers.WorldManager;
 import com.dragonrun.websocket.DirectorWebSocketServer;
+import com.dragonrun.websocket.models.GameSnapshot;
 import io.papermc.paper.command.brigadier.Commands;
 import io.papermc.paper.plugin.lifecycle.event.types.LifecycleEvents;
 import org.bukkit.plugin.java.JavaPlugin;
@@ -121,12 +122,26 @@ public class DragonRunPlugin extends JavaPlugin {
             directorServer = new DirectorWebSocketServer(this, port);
             directorServer.start();
 
-            // Start periodic state broadcasts
+            // Start periodic state broadcasts (capture on main thread, send async)
             getServer().getScheduler().runTaskTimer(this, () -> {
                 if (directorServer != null) {
-                    directorServer.broadcastGameState();
+                    // Capture snapshot on main thread (safe Bukkit API access)
+                    GameSnapshot snapshot = directorServer.captureSnapshot();
+                    if (snapshot != null) {
+                        // Serialize and send on async thread (non-blocking)
+                        getServer().getScheduler().runTaskAsynchronously(this, () -> {
+                            directorServer.broadcastSnapshot(snapshot);
+                        });
+                    }
                 }
             }, broadcastInterval, broadcastInterval);
+
+            // Start periodic command journal cleanup (every 30 seconds)
+            getServer().getScheduler().runTaskTimer(this, () -> {
+                if (directorServer != null) {
+                    directorServer.cleanupCommandJournal();
+                }
+            }, 600L, 600L); // 30 seconds
 
             getLogger().info("Director AI WebSocket enabled on port " + port);
         }

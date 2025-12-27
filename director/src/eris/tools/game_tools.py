@@ -1,9 +1,14 @@
 """Minecraft action tools for Eris."""
 
 import logging
-from typing import TYPE_CHECKING, List
+import time
+from typing import TYPE_CHECKING, Dict, List
 
 from langchain_core.tools import tool
+
+# Teleport cooldown tracking: player -> last teleport timestamp
+_teleport_cooldowns: Dict[str, float] = {}
+TELEPORT_COOLDOWN_SECONDS = 600  # 10 minutes
 
 from .schemas import (
     SpawnMobArgs,
@@ -80,7 +85,7 @@ def create_game_tools(ws_client: "GameStateClient") -> List:
     async def apply_effect(
         player: str, effect: str, duration: int = 60, amplifier: int = 0
     ):
-        """Apply a potion effect to a player."""
+        """Apply a potion effect to a player. Dramatic uses: 'blindness' with warden sounds, 'darkness' for ambush, 'levitation' near cliffs, 'slow_falling' before anvils, 'glowing' reveals to mobs, 'nausea' in combat, 'poison'/'wither' slow pressure (max 30s), 'speed' reward or curse, 'night_vision' gift or remove in caves, 'weakness' before mobs, 'invisibility' hide but mock them, 'absorption' divine favor, 'regeneration' mercy or prolong suffering, 'hunger' drain food mid-fight, 'jump_boost' escape or ceiling trap, 'haste' mining reward or dig into lava, 'mining_fatigue' trap in obsidian, 'luck'/'unluck' twist fortune, 'conduit_power' rare underwater gift."""
         logger.info(
             f"🔧 Tool: apply_effect(player={player}, effect={effect}, duration={duration}s, amp={amplifier})"
         )
@@ -125,7 +130,18 @@ def create_game_tools(ws_client: "GameStateClient") -> List:
 
     @tool("teleport", args_schema=TeleportArgs)
     async def teleport_player(player: str, mode: str = "random", target: str | None = None, radius: int = 100, distance: int = 200):
-        """Teleport a player - random location, swap with another, or isolate far away."""
+        """Teleport a player - random location, swap with another, or isolate far away. Has 10 minute cooldown per player."""
+        # Check cooldown
+        now = time.time()
+        last_tp = _teleport_cooldowns.get(player, 0)
+        cooldown_remaining = TELEPORT_COOLDOWN_SECONDS - (now - last_tp)
+
+        if cooldown_remaining > 0:
+            minutes_left = int(cooldown_remaining // 60)
+            seconds_left = int(cooldown_remaining % 60)
+            logger.warning(f"🔧 Teleport BLOCKED: {player} on cooldown ({minutes_left}m {seconds_left}s remaining)")
+            return f"Cannot teleport {player} - on cooldown for {minutes_left}m {seconds_left}s."
+
         logger.info(f"🔧 Tool: teleport_player(player={player}, mode={mode})")
         params = {"player": player, "mode": mode}
         if mode == "swap" and target:
@@ -135,6 +151,10 @@ def create_game_tools(ws_client: "GameStateClient") -> List:
         elif mode == "isolate":
             params["distance"] = distance
         await ws_client.send_command("teleport", params, reason="Eris Teleport")
+
+        # Update cooldown
+        _teleport_cooldowns[player] = now
+
         return f"Teleported {player} ({mode} mode)."
 
     @tool("sound", args_schema=PlaySoundArgs)

@@ -483,6 +483,29 @@ public class WorldManager {
     }
 
     /**
+     * Teleport a returning player to the hardcore world WITHOUT clearing inventory.
+     * Used for players who disconnected and rejoined during an active run.
+     */
+    public CompletableFuture<Boolean> teleportToHardcoreReturning(Player player) {
+        if (hardcoreWorld == null) {
+            return CompletableFuture.completedFuture(false);
+        }
+
+        Location spawn = hardcoreWorld.getSpawnLocation();
+        spawn.setY(spawn.getY() + 0.5);
+
+        return player.teleportAsync(spawn).thenApply(success -> {
+            if (success) {
+                player.setGameMode(GameMode.SURVIVAL);
+                // DO NOT clear inventory - player is returning
+                // Reset portal cooldown to allow immediate portal use
+                player.setPortalCooldown(0);
+            }
+            return success;
+        });
+    }
+
+    /**
      * Teleport a player to the hardcore world as a spectator.
      * Used for mid-run joiners.
      */

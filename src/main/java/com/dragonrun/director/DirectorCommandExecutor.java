@@ -166,7 +166,8 @@ public class DirectorCommandExecutor {
                 int stay = params.has("stay") ? params.get("stay").getAsInt() : 70;
                 int fadeOut = params.has("fadeOut") ? params.get("fadeOut").getAsInt()
                     : params.has("fade_out") ? params.get("fade_out").getAsInt() : 20;
-                yield "director title " + player + " " + fadeIn + " " + stay + " " + fadeOut + " " + titleText + " | " + subtitleText;
+                // Use ||| as delimiter to handle multi-word titles with spaces
+                yield "director title " + player + " " + fadeIn + " " + stay + " " + fadeOut + " " + titleText + "|||" + subtitleText;
             }
             case "gamerule" -> {
                 String rule = params.get("rule").getAsString();

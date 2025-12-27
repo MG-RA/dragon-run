@@ -68,7 +68,12 @@ director:
   enabled: true
   # WebSocket server port
   port: 8765
-  # State broadcast interval (ticks, 100 = 5 seconds)
-  broadcast-interval: 100
+  # State broadcast interval (ticks, 20 = 1 second)
+  # State is a slow heartbeat; events are sent immediately
+  broadcast-interval: 20
   # Monitor chat messages and send to director
   monitor-chat: true
+  # Command journal TTL in seconds (for reconnect replay)
+  command-journal-ttl-seconds: 60
+  # Minimum interval between state broadcasts (ms) - skips unchanged states
+  min-state-interval-ms: 1000

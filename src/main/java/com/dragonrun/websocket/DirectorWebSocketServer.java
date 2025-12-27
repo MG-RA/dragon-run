@@ -1,6 +1,7 @@
 package com.dragonrun.websocket;
 
 import com.dragonrun.DragonRunPlugin;
+import com.dragonrun.websocket.models.GameSnapshot;
 import com.dragonrun.websocket.models.PlayerStateSnapshot;
 import com.google.gson.Gson;
 import com.google.gson.JsonArray;
@@ -15,7 +16,11 @@ import org.java_websocket.handshake.ClientHandshake;
 import org.java_websocket.server.WebSocketServer;
 
 import java.net.InetSocketAddress;
-import java.util.*;
+import java.util.Map;
+import java.util.Queue;
+import java.util.Set;
+import java.util.UUID;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CopyOnWriteArraySet;
 import java.util.concurrent.LinkedBlockingQueue;
 
@@ -31,12 +36,44 @@ public class DirectorWebSocketServer extends WebSocketServer {
     private final Queue<JsonObject> recentEvents;
     private static final int MAX_EVENT_HISTORY = 20;
 
+    // Command journal for reliable command delivery
+    private final Map<String, PendingCommand> commandJournal;
+    private final long commandTtlMs;
+
+    // State throttling
+    private volatile long lastStateBroadcast = 0;
+    private volatile int lastStateHash = 0;
+    private final long minStateIntervalMs;
+
+    /**
+     * Represents a pending command in the journal.
+     */
+    private record PendingCommand(
+        String commandId,
+        JsonObject commandJson,
+        long receivedAt,
+        boolean acknowledged
+    ) {
+        PendingCommand withAcknowledged(boolean ack) {
+            return new PendingCommand(commandId, commandJson, receivedAt, ack);
+        }
+    }
+
     public DirectorWebSocketServer(DragonRunPlugin plugin, int port) {
         super(new InetSocketAddress(port));
         this.plugin = plugin;
         this.gson = new Gson();
         this.clients = new CopyOnWriteArraySet<>();
         this.recentEvents = new LinkedBlockingQueue<>();
+        this.commandJournal = new ConcurrentHashMap<>();
+
+        // Load config values with defaults
+        this.commandTtlMs = plugin.getConfig().getLong("director.command-journal-ttl-seconds", 60) * 1000L;
+        this.minStateIntervalMs = plugin.getConfig().getLong("director.min-state-interval-ms", 1000);
+
+        // Enable automatic ping/pong handling - responds to client pings
+        // and detects dead connections. Value is in seconds (0 = disabled).
+        setConnectionLostTimeout(30);
     }
 
     @Override
@@ -46,6 +83,38 @@ public class DirectorWebSocketServer extends WebSocketServer {
 
         // Send initial state
         sendCurrentState(conn);
+
+        // Replay unacknowledged commands from journal
+        replayUnacknowledgedCommands(conn);
+    }
+
+    /**
+     * Replay unacknowledged commands to a newly connected client.
+     * This ensures commands survive reconnects.
+     */
+    private void replayUnacknowledgedCommands(WebSocket conn) {
+        long now = System.currentTimeMillis();
+        int replayed = 0;
+
+        for (PendingCommand cmd : commandJournal.values()) {
+            // Only replay if: not acknowledged AND within TTL
+            if (!cmd.acknowledged() && (now - cmd.receivedAt()) < commandTtlMs) {
+                JsonObject replay = new JsonObject();
+                replay.addProperty("type", "command_replay");
+                replay.addProperty("command_id", cmd.commandId());
+                replay.add("original_command", cmd.commandJson());
+                replay.addProperty("original_timestamp", cmd.receivedAt());
+
+                if (conn.isOpen()) {
+                    conn.send(gson.toJson(replay));
+                    replayed++;
+                }
+            }
+        }
+
+        if (replayed > 0) {
+            plugin.getLogger().info("Replayed " + replayed + " unacknowledged commands to reconnected client");
+        }
     }
 
     @Override
@@ -80,21 +149,26 @@ public class DirectorWebSocketServer extends WebSocketServer {
      * Handle a command request from the Director AI.
      */
     private void handleCommand(WebSocket conn, JsonObject commandJson) {
-        // Extract command_id for correlation (if provided)
-        String commandId = commandJson.has("command_id") ? commandJson.get("command_id").getAsString() : null;
+        // Extract or generate command_id for correlation and journaling
+        String commandId = commandJson.has("command_id")
+            ? commandJson.get("command_id").getAsString()
+            : "srv_" + UUID.randomUUID().toString().substring(0, 8);
+
+        // Add to journal before execution
+        long receivedAt = System.currentTimeMillis();
+        commandJournal.put(commandId, new PendingCommand(commandId, commandJson, receivedAt, false));
 
         com.dragonrun.director.DirectorCommandExecutor.execute(plugin, commandJson, result -> {
+            // Mark command as acknowledged in journal
+            commandJournal.computeIfPresent(commandId, (k, v) -> v.withAcknowledged(true));
+
             // Send result back to director
             JsonObject response = new JsonObject();
             response.addProperty("type", "command_result");
             response.addProperty("success", result.success());
             response.addProperty("message", result.message());
             response.addProperty("timestamp", System.currentTimeMillis());
-
-            // Include command_id for correlation if it was provided
-            if (commandId != null) {
-                response.addProperty("command_id", commandId);
-            }
+            response.addProperty("command_id", commandId);
 
             if (conn.isOpen()) {
                 conn.send(gson.toJson(response));
@@ -104,6 +178,11 @@ public class DirectorWebSocketServer extends WebSocketServer {
             plugin.getLogger().info(String.format("Director command executed: %s - %s",
                 result.success() ? "SUCCESS" : "FAILED",
                 result.message()));
+
+            // Schedule removal from journal after a short delay (let client process result)
+            Bukkit.getScheduler().runTaskLater(plugin, () -> {
+                commandJournal.remove(commandId);
+            }, 100L); // 5 seconds
         });
     }
 
@@ -127,7 +206,9 @@ public class DirectorWebSocketServer extends WebSocketServer {
 
     /**
      * Broadcast game state to all connected clients.
+     * @deprecated Use captureSnapshot() on main thread, then broadcastSnapshot() on async thread.
      */
+    @Deprecated
     public void broadcastGameState() {
         if (clients.isEmpty()) return;
 
@@ -139,6 +220,97 @@ public class DirectorWebSocketServer extends WebSocketServer {
                 client.send(json);
             }
         }
+    }
+
+    /**
+     * Capture a snapshot of the current game state.
+     * MUST be called from the main server thread.
+     *
+     * @return Immutable game snapshot, or null if no clients connected
+     */
+    public GameSnapshot captureSnapshot() {
+        if (clients.isEmpty()) return null;
+        return GameSnapshot.capture(plugin, recentEvents);
+    }
+
+    /**
+     * Broadcast a pre-captured game snapshot to all connected clients.
+     * Safe to call from any thread (async recommended).
+     * Includes throttling: skips broadcast if state unchanged and within min interval.
+     *
+     * @param snapshot The immutable game snapshot to broadcast
+     */
+    public void broadcastSnapshot(GameSnapshot snapshot) {
+        if (snapshot == null || clients.isEmpty()) return;
+
+        JsonObject state = snapshotToJson(snapshot);
+        String json = gson.toJson(state);
+
+        // State throttling: skip if unchanged and within interval
+        long now = System.currentTimeMillis();
+        int newHash = json.hashCode();
+
+        if (newHash == lastStateHash && (now - lastStateBroadcast) < minStateIntervalMs) {
+            return; // Skip - nothing changed
+        }
+
+        lastStateHash = newHash;
+        lastStateBroadcast = now;
+
+        for (WebSocket client : clients) {
+            if (client.isOpen()) {
+                client.send(json);
+            }
+        }
+    }
+
+    /**
+     * Convert an immutable GameSnapshot to JSON for transmission.
+     */
+    private JsonObject snapshotToJson(GameSnapshot snapshot) {
+        JsonObject state = new JsonObject();
+
+        state.addProperty("type", "state");
+        state.addProperty("timestamp", snapshot.timestamp());
+        state.addProperty("gameState", snapshot.gameState());
+        state.addProperty("runId", snapshot.runId());
+        state.addProperty("runDuration", snapshot.runDuration());
+        state.addProperty("dragonAlive", snapshot.dragonAlive());
+        state.addProperty("dragonHealth", snapshot.dragonHealth());
+        state.addProperty("worldName", snapshot.worldName());
+
+        if (snapshot.worldSeed() != null) {
+            state.addProperty("worldSeed", snapshot.worldSeed());
+        }
+        state.addProperty("weatherState", snapshot.weatherState());
+        state.addProperty("timeOfDay", snapshot.timeOfDay());
+
+        state.addProperty("lobbyPlayers", snapshot.lobbyPlayers());
+        state.addProperty("hardcorePlayers", snapshot.hardcorePlayers());
+        state.addProperty("totalPlayers", snapshot.totalPlayers());
+
+        if (snapshot.voteCount() != null) {
+            state.addProperty("voteCount", snapshot.voteCount());
+        }
+        if (snapshot.votesRequired() != null) {
+            state.addProperty("votesRequired", snapshot.votesRequired());
+        }
+
+        // Players
+        JsonArray players = new JsonArray();
+        for (PlayerStateSnapshot player : snapshot.players()) {
+            players.add(gson.toJsonTree(player));
+        }
+        state.add("players", players);
+
+        // Recent events
+        JsonArray events = new JsonArray();
+        for (JsonObject event : snapshot.recentEvents()) {
+            events.add(event);
+        }
+        state.add("recentEvents", events);
+
+        return state;
     }
 
     /**
@@ -276,9 +448,35 @@ public class DirectorWebSocketServer extends WebSocketServer {
     public void shutdown() {
         try {
             plugin.getLogger().info("Shutting down Director WebSocket server...");
+            commandJournal.clear();
             stop(1000);
         } catch (InterruptedException e) {
             plugin.getLogger().warning("WebSocket shutdown interrupted: " + e.getMessage());
+        }
+    }
+
+    /**
+     * Clean up expired entries from the command journal.
+     * Should be called periodically (e.g., every 30 seconds).
+     */
+    public void cleanupCommandJournal() {
+        long now = System.currentTimeMillis();
+        int removed = 0;
+
+        var iterator = commandJournal.entrySet().iterator();
+        while (iterator.hasNext()) {
+            var entry = iterator.next();
+            PendingCommand cmd = entry.getValue();
+
+            // Remove if expired (regardless of acknowledged status)
+            if ((now - cmd.receivedAt()) > commandTtlMs) {
+                iterator.remove();
+                removed++;
+            }
+        }
+
+        if (removed > 0) {
+            plugin.getLogger().fine("Cleaned up " + removed + " expired commands from journal");
         }
     }
 
@@ -287,5 +485,14 @@ public class DirectorWebSocketServer extends WebSocketServer {
      */
     public int getClientCount() {
         return clients.size();
+    }
+
+    /**
+     * Get number of pending commands in journal.
+     */
+    public int getPendingCommandCount() {
+        return (int) commandJournal.values().stream()
+            .filter(cmd -> !cmd.acknowledged())
+            .count();
     }
 }

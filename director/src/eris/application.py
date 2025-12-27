@@ -149,11 +149,12 @@ class ErisApplication:
                 long_memory=long_memory,
             )
 
-            # WebSocket client (will be fully configured in run())
+            # WebSocket client with reliability improvements
             self.services.ws_client = GameStateClient(
-                self.config.websocket.uri,
-                self._on_state_update,
-                self._on_event,
+                uri=self.config.websocket.uri,
+                on_state_update=self._on_state_update,
+                on_event=self._on_event,
+                config=self.config.websocket,
             )
 
             # Build graph

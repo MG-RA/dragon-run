@@ -7,6 +7,7 @@ agentic_action -> protection_decision -> tool_executor -> END
 No more fast paths or conditional routing.
 """
 
+import asyncio
 import random
 import logging
 from datetime import datetime
@@ -688,18 +689,17 @@ Be {mask.value.upper()}! Output ONLY the message or use tools.
             # Fallback: extract text for broadcast
             content = response.content.strip() if response.content else ""
             if content and decision["should_speak"]:
-                # Validate content - reject structured/markdown responses
-                content = _sanitize_broadcast_content(content)
-                if content:
-                    narrative_text = content
-                    planned_actions.append(PlannedAction(
-                        tool="broadcast",
-                        args={"message": content},
-                        purpose="narrative",
-                    ))
-                    logger.info(f"🎬 Script (text only): {content[:50]}...")
-                else:
-                    logger.warning("🎬 Rejected invalid LLM output (markdown/structured)")
+                # Extract first meaningful line if multi-line
+                lines = [l.strip() for l in content.split('\n') if l.strip()]
+                if lines:
+                    content = lines[0]
+                narrative_text = content
+                planned_actions.append(PlannedAction(
+                    tool="broadcast",
+                    args={"message": content},
+                    purpose="narrative",
+                ))
+                logger.info(f"🎬 Script (text only): {content[:50]}...")
 
         script = ScriptOutput(
             narrative_text=narrative_text,
@@ -886,13 +886,14 @@ async def protection_decision(state: ErisState, llm: Any, ws_client: Any = None)
 
 # === Node 7: Tool Executor ===
 
-async def tool_executor(state: ErisState, ws_client: Any, db: Database = None, llm: Any = None) -> Dict[str, Any]:
+async def tool_executor(state: ErisState, ws_client: Any, db: Database = None, llm: Any = None, tools: List = None) -> Dict[str, Any]:
     """
     Execute approved actions via WebSocket.
     Updates session with results and fear/chaos/karma.
 
     v1.1: Executes approved_actions (post-validation) and updates karmas.
     v1.2: Added retry logic for failed commands with available tools prompt.
+    v1.3: Invokes actual tool functions to enforce cooldowns.
     """
     approved_actions = state.get("approved_actions", [])
     mask = state["current_mask"]
@@ -905,41 +906,57 @@ async def tool_executor(state: ErisState, ws_client: Any, db: Database = None, l
     results = []
     retry_queue = []  # Actions that need retry
 
+    # Build tool name -> tool function mapping
+    tool_map = {}
+    if tools:
+        for tool in tools:
+            tool_map[tool.name] = tool
+
+    # === Execute actions through actual tool functions (enforces cooldowns) ===
     for action in approved_actions:
         tool_name = action.get("tool", "")
         args = action.get("args", {})
         purpose = action.get("purpose", "unknown")
 
         try:
-            # Use send_command_with_result to check for failures
-            if hasattr(ws_client, 'send_command_with_result'):
-                result = await ws_client.send_command_with_result(tool_name, args, reason=f"Eris {purpose}")
-                success = result.get("success", False)
-                message = result.get("message", "")
+            # If we have the tool function, invoke it (includes cooldown checks)
+            if tool_name in tool_map:
+                tool_func = tool_map[tool_name]
+                result = await tool_func.ainvoke(args)
 
-                if not success and "Unknown command" in message:
-                    # Queue for retry with LLM correction
-                    retry_queue.append({
-                        "original_tool": tool_name,
-                        "args": args,
+                # Check if result indicates cooldown block
+                result_str = str(result).lower()
+                if "on cooldown" in result_str:
+                    # Extract cooldown time from result (e.g., "on cooldown for 9m 42s")
+                    logger.warning(f"⏰ Cooldown blocked: {tool_name} - {result}")
+                    results.append({
+                        "tool": tool_name,
+                        "success": False,
                         "purpose": purpose,
-                        "error": message,
+                        "reason": "cooldown",
+                        "message": str(result)
                     })
-                    logger.warning(f"⚠️ Command failed (will retry): {tool_name} - {message}")
                     continue
+
+                results.append({
+                    "tool": tool_name,
+                    "success": True,
+                    "purpose": purpose,
+                    "message": str(result)
+                })
+                logger.info(f"✅ Executed: {tool_name} ({purpose})")
             else:
-                # Fallback to fire-and-forget
-                success = await ws_client.send_command(tool_name, args, reason=f"Eris {purpose}")
+                # Fallback to direct WebSocket (for legacy or unknown tools)
+                await ws_client.send_command(tool_name, args, reason=f"Eris {purpose}")
+                results.append({
+                    "tool": tool_name,
+                    "success": True,  # Assume success - fire and forget
+                    "purpose": purpose,
+                })
+                logger.info(f"✅ Executed: {tool_name} ({purpose})")
 
-            results.append({
-                "tool": tool_name,
-                "success": success,
-                "purpose": purpose,
-            })
-            logger.info(f"✅ Executed: {tool_name} ({purpose})")
-
-            # Update karma based on action
-            if db and decision:
+            # Update karma based on action (only for successful actions)
+            if db and decision and results[-1].get("success", False):
                 target_player = args.get("player") or args.get("near_player")
                 if target_player:
                     karma_delta = calculate_karma_delta(tool_name, purpose, mask)
@@ -949,9 +966,9 @@ async def tool_executor(state: ErisState, ws_client: Any, db: Database = None, l
                         players = game_state.get("players", [])
                         for p in players:
                             if p.get("username") == target_player:
-                                uuid = str(p.get("uuid", ""))
-                                if uuid:
-                                    await db.update_player_karma(uuid, mask.name, karma_delta)
+                                player_uuid = str(p.get("uuid", ""))
+                                if player_uuid:
+                                    await db.update_player_karma(player_uuid, mask.name, karma_delta)
                                     logger.debug(f"💀 Karma updated: {mask.name} +{karma_delta} for {target_player}")
                                 break
 
@@ -968,15 +985,56 @@ async def tool_executor(state: ErisState, ws_client: Any, db: Database = None, l
                         if resolution_delta != 0:
                             for p in players:
                                 if p.get("username") == target_player:
-                                    uuid = str(p.get("uuid", ""))
-                                    if uuid:
-                                        await db.update_player_karma(uuid, mask.name, resolution_delta)
+                                    player_uuid = str(p.get("uuid", ""))
+                                    if player_uuid:
+                                        await db.update_player_karma(player_uuid, mask.name, resolution_delta)
                                         logger.info(f"💀 Karma resolved: {mask.name} {resolution_delta} for {target_player}")
                                     break
 
         except Exception as e:
-            logger.error(f"Error executing {tool_name}: {e}")
-            results.append({"tool": tool_name, "success": False, "purpose": purpose})
+            error_msg = str(e)
+
+            # Parse Pydantic validation errors for better feedback
+            if "validation error" in error_msg.lower():
+                # Extract constraint info (e.g., "Input should be less than or equal to 500")
+                if "less_than_equal" in error_msg:
+                    import re
+                    # Try to extract the max value and actual value
+                    max_match = re.search(r"less than or equal to (\d+)", error_msg)
+                    input_match = re.search(r"input_value=(\d+)", error_msg)
+                    if max_match and input_match:
+                        max_val = max_match.group(1)
+                        input_val = input_match.group(1)
+                        friendly_msg = f"{tool_name} parameter too high: {input_val} exceeds maximum of {max_val}"
+                        logger.error(f"❌ Validation error: {friendly_msg}")
+                        results.append({
+                            "tool": tool_name,
+                            "success": False,
+                            "purpose": purpose,
+                            "reason": "validation_error",
+                            "message": friendly_msg
+                        })
+                        continue
+
+                # Generic validation error
+                logger.error(f"❌ Validation error for {tool_name}: {e}")
+                results.append({
+                    "tool": tool_name,
+                    "success": False,
+                    "purpose": purpose,
+                    "reason": "validation_error",
+                    "message": f"{tool_name} has invalid parameters"
+                })
+            else:
+                # Other errors
+                logger.error(f"❌ Error executing {tool_name}: {e}")
+                results.append({
+                    "tool": tool_name,
+                    "success": False,
+                    "purpose": purpose,
+                    "reason": "error",
+                    "message": error_msg
+                })
 
     # === Retry failed commands with LLM correction ===
     if retry_queue and llm:
@@ -1036,9 +1094,11 @@ Example: "particles" or "lookat" or "spawn"
 
             logger.info(f"🔄 Retrying: {original_tool} → {corrected_tool}")
 
-            # Try the corrected command
+            # Try the corrected command with short timeout
             if hasattr(ws_client, 'send_command_with_result'):
-                result = await ws_client.send_command_with_result(corrected_tool, args, reason=f"Eris {purpose} (retry)")
+                result = await ws_client.send_command_with_result(
+                    corrected_tool, args, reason=f"Eris {purpose} (retry)", timeout=3.0
+                )
                 success = result.get("success", False)
             else:
                 success = await ws_client.send_command(corrected_tool, args, reason=f"Eris {purpose} (retry)")

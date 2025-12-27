@@ -10,9 +10,16 @@ from pydantic_settings import BaseSettings
 class WebSocketConfig(BaseModel):
     """WebSocket connection settings."""
     uri: str = "ws://localhost:8765"
+    # Reconnection settings (exponential backoff)
     reconnect_base_delay: float = Field(default=1.0, ge=0.5, le=10.0)
-    reconnect_max_delay: float = Field(default=60.0, ge=5.0, le=300.0)
+    reconnect_max_delay: float = Field(default=30.0, ge=5.0, le=300.0)
     reconnect_jitter: float = Field(default=0.1, ge=0.0, le=0.5)
+    # Heartbeat settings (ping/pong for dead connection detection)
+    ping_interval: float = Field(default=10.0, ge=5.0, le=60.0)
+    ping_timeout: float = Field(default=5.0, ge=2.0, le=30.0)
+    # Command queue settings
+    command_queue_max_size: int = Field(default=100, ge=10, le=1000)
+    command_timeout: float = Field(default=10.0, ge=2.0, le=60.0)
 
 
 class DatabaseConfig(BaseModel):

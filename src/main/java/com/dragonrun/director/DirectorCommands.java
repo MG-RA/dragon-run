@@ -255,12 +255,16 @@ public class DirectorCommands {
                     .then(Commands.argument("titleArgs", StringArgumentType.greedyString())
                         .executes(ctx -> {
                             String args = StringArgumentType.getString(ctx, "titleArgs");
-                            String[] parts = args.split(" ", 6);
+                            // Format: player fadeIn stay fadeOut titleText|||subtitleText
+                            // First split by space with limit 5 to get player and timing params
+                            String[] parts = args.split(" ", 5);
                             String player = parts[0];
                             int fadeIn = Integer.parseInt(parts[1]);
                             int stay = Integer.parseInt(parts[2]);
                             int fadeOut = Integer.parseInt(parts[3]);
-                            String[] texts = parts.length > 4 ? parts[4].split(" \\| ", 2) : new String[]{"", ""};
+                            // The rest contains "titleText|||subtitleText"
+                            String textPart = parts.length > 4 ? parts[4] : "|||";
+                            String[] texts = textPart.split("\\|\\|\\|", 2);
                             String title = texts.length > 0 ? texts[0] : "";
                             String subtitle = texts.length > 1 ? texts[1] : "";
                             return executeShowTitle(ctx.getSource(), player, title, subtitle, fadeIn, stay, fadeOut);
@@ -1118,20 +1122,44 @@ public class DirectorCommands {
             return 0;
         }
 
+        // Normalize particle name - handle common aliases
+        String normalizedName = particleName.toUpperCase().replace("-", "_");
+
         // Parse particle type
         Particle particle;
         try {
-            particle = Particle.valueOf(particleName.toUpperCase());
+            particle = Particle.valueOf(normalizedName);
         } catch (IllegalArgumentException e) {
             source.getSender().sendMessage(Component.text("Invalid particle: " + particleName, NamedTextColor.RED));
             return 0;
         }
 
-        Location loc = player.getLocation().add(0, 1, 0); // Spawn at player's torso height
+        // Spawn at player's eye location so particles are visible even in tunnels
+        Location loc = player.getEyeLocation();
         World world = player.getWorld();
 
-        // Spawn particles in a sphere around the player
-        world.spawnParticle(particle, loc, count, spread, spread, spread, 0.0);
+        // Spawn particles - some need special handling
+        try {
+            // Particles that need extra speed/data parameter to be visible
+            if (particle == Particle.DRAGON_BREATH || particle == Particle.END_ROD ||
+                particle == Particle.PORTAL || particle == Particle.REVERSE_PORTAL) {
+                // These particles need a non-zero speed to show properly
+                world.spawnParticle(particle, loc, count, spread, spread, spread, 0.05);
+            } else if (particle == Particle.DUST) {
+                // Dust requires DustOptions
+                world.spawnParticle(particle, loc, count, spread, spread, spread, 0,
+                    new Particle.DustOptions(Color.PURPLE, 1.0f));
+            } else {
+                world.spawnParticle(particle, loc, count, spread, spread, spread, 0.0);
+            }
+        } catch (Exception e) {
+            // Fall back to a safe particle
+            source.getSender().sendMessage(Component.text(
+                "Particle " + particleName + " failed, using SOUL instead: " + e.getMessage(),
+                NamedTextColor.YELLOW
+            ));
+            world.spawnParticle(Particle.SOUL, loc, count, spread, spread, spread, 0.0);
+        }
 
         source.getSender().sendMessage(Component.text(
             "Spawned " + count + " " + particleName + " particles near " + playerName,

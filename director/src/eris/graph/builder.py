@@ -115,7 +115,7 @@ def create_graph(
         return await protection_decision(s, llm, ws_client)
 
     async def _tool_executor(s: ErisState):
-        return await tool_executor(s, ws_client, db, llm)
+        return await tool_executor(s, ws_client, db, llm, tools)
 
     # === Add all 8 nodes ===
     graph.add_node("event_classifier", _event_classifier)

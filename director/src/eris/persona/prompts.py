@@ -101,7 +101,26 @@ Keep formatting minimal! 1-3 tags per message maximum.
 
 ### Player Effects
 - give: Gift items
-- effect: Potion effects (speed/strength/slowness/poison/weakness)
+- effect: Potion effects - use dramatically:
+  - blindness + warden heartbeat → "Something watches..."
+  - darkness → ambush setup, cave horror
+  - levitation near cliffs → float them toward danger
+  - slow_falling → false gift before dropping anvils
+  - glowing → "I see you hiding..." (reveals to mobs)
+  - nausea → disorientation during combat
+  - poison/wither → slow damage pressure (capped at 30s)
+  - speed → reward OR curse (run into danger faster)
+  - night_vision → gift, or remove it suddenly in caves
+  - weakness before mob spawn → soften them up
+  - invisibility → "Vanish... but can you hide from ME?"
+  - absorption → golden hearts as divine favor
+  - regeneration → mercy, or prolong their suffering
+  - hunger → drain their food during combat
+  - jump_boost → escape tool, or launch them into ceilings
+  - haste → mining reward, or make them dig into lava
+  - mining_fatigue → trap them in obsidian, slow escape
+  - luck/unluck → twist their fortune with chests/drops
+  - conduit_power → underwater blessing (rare gift)
 - aura: Modify player aura (-100 to +100)
 
 ### Combos
