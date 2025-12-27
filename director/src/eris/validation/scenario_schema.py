@@ -8,9 +8,16 @@ A scenario represents a synthetic Minecraft run with:
 """
 
 from enum import Enum
-from typing import Any, Literal
+from typing import Literal
 
 from pydantic import BaseModel, Field, field_validator
+
+
+class ScenarioMode(str, Enum):
+    """How the scenario generates events."""
+
+    SCRIPTED = "scripted"  # Events are pre-defined in the scenario
+    EMERGENT = "emergent"  # Events emerge from tarot-driven player brains
 
 
 class PlayerRole(str, Enum):
@@ -161,6 +168,7 @@ class ScenarioMetadata(BaseModel):
     description: str = Field(default="", description="What this scenario tests")
     difficulty: Literal["easy", "medium", "hard", "extreme"] = Field(default="medium")
     tags: list[str] = Field(default_factory=list, description="Tags for categorization")
+    seed: int | None = Field(default=None, description="Random seed for reproducibility")
 
 
 class Scenario(BaseModel):
@@ -170,7 +178,24 @@ class Scenario(BaseModel):
     party: dict[str, PlayerDefinition] | PartyPreset = Field(
         description="Player definitions OR preset name"
     )
-    events: list[Event] = Field(description="Ordered sequence of events")
+    events: list[Event] = Field(
+        default_factory=list, description="Ordered sequence of events (scripted mode)"
+    )
+
+    # Emergent mode settings
+    mode: ScenarioMode = Field(
+        default=ScenarioMode.SCRIPTED, description="Scripted or emergent event generation"
+    )
+    max_ticks: int = Field(
+        default=1000, ge=1, le=10000, description="Max ticks for emergent scenarios"
+    )
+    initial_tarot: dict[str, dict[str, float]] = Field(
+        default_factory=dict,
+        description="Initial tarot weights per player: {player: {card: weight}}",
+    )
+    target_phase: Literal["early", "nether", "end", "dragon"] = Field(
+        default="dragon", description="Target game phase for emergent scenarios"
+    )
 
     @field_validator("events")
     @classmethod

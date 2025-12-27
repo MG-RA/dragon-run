@@ -28,6 +28,7 @@ from .scenario_schema import (
     Scenario,
     StructureDiscoveryEvent,
 )
+from .tarot import TarotCard, TarotProfile, get_drift_for_event
 from .world_diff import RunTrace, WorldDiff
 
 
@@ -134,6 +135,11 @@ class SyntheticWorld:
     # Sequence counter
     _sequence: int = 0
 
+    # ==================== TAROT (PHASE 6) ====================
+
+    # Player tarot profiles (for emergent scenarios)
+    player_tarot: dict[str, TarotProfile] = field(default_factory=dict)
+
     # ==================== FACTORY METHODS ====================
 
     @classmethod
@@ -175,10 +181,24 @@ class SyntheticWorld:
             world.active_effects[name] = []
             world.discovered_structures[name] = set()
 
+            # Initialize tarot profile (starts neutral)
+            world.player_tarot[name] = TarotProfile()
+
         # Start the run
         world.game_state = GameState.ACTIVE
 
         return world
+
+    def initialize_tarot(self, initial_weights: dict[str, dict[str, float]]) -> None:
+        """
+        Initialize tarot weights from scenario definition.
+
+        Args:
+            initial_weights: player_name -> {card_name: weight}
+        """
+        for player_name, weights in initial_weights.items():
+            if player_name in self.player_tarot:
+                self.player_tarot[player_name] = TarotProfile.from_initial_weights(weights)
 
     # ==================== EVENT APPLICATION ====================
 
@@ -213,6 +233,9 @@ class SyntheticWorld:
             diff.triggered_phase_change = True
             diff.old_phase = old_phase.value
             diff.new_phase = self.phase.value
+
+        # Update tarot based on event (Phase 6)
+        self._drift_tarot_from_event(event)
 
         # Log event
         self.event_history.append(event)
@@ -742,6 +765,43 @@ class SyntheticWorld:
                 self.phase = phase
                 return
         self.phase = Phase.NORMAL
+
+    # ==================== TAROT (PHASE 6) ====================
+
+    def _drift_tarot_from_event(self, event: Event) -> None:
+        """
+        Update player tarot profiles based on what happened.
+
+        Events drift tarot weights automatically, causing player
+        identity to evolve through behavior.
+        """
+        player_name = getattr(event, "player", None)
+        if not player_name or player_name not in self.player_tarot:
+            return
+
+        profile = self.player_tarot[player_name]
+        drifts = get_drift_for_event(event.type, event)
+
+        for card, amount in drifts.items():
+            profile.drift(card, amount)
+
+    def get_player_tarot(self, player_name: str) -> TarotProfile | None:
+        """Get a player's current tarot profile."""
+        return self.player_tarot.get(player_name)
+
+    def get_player_dominant_tarot(self, player_name: str) -> TarotCard | None:
+        """Get a player's dominant tarot card."""
+        profile = self.player_tarot.get(player_name)
+        if profile:
+            return profile.dominant_card
+        return None
+
+    def get_tarot_summary(self) -> dict[str, dict]:
+        """Get a summary of all player tarot profiles."""
+        return {
+            name: profile.to_dict()
+            for name, profile in self.player_tarot.items()
+        }
 
     # ==================== SNAPSHOT GENERATION ====================
 

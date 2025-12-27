@@ -133,6 +133,7 @@ async def context_enricher(state: ErisState, db: Database) -> dict[str, Any]:
     Also initializes fear/chaos from memory or defaults.
 
     v1.1: Also loads player_karmas and prophecy_state.
+    v1.4: Includes event player if not in game_state.players (timing fix for player_joined).
     """
     if not db or not db.pool:
         logger.warning("Database not available for context enrichment")
@@ -143,11 +144,30 @@ async def context_enricher(state: ErisState, db: Database) -> dict[str, Any]:
         }
 
     game_state = state.get("game_state", {})
-    players = game_state.get("players", [])
+    players = list(game_state.get("players", []))  # Make a copy to avoid mutating original
     player_histories = {}
     player_uuids = []
 
-    logger.info(f"📚 Context enricher: {len(players)} players online")
+    # Include event player if they're not in the players list yet (timing fix for player_joined)
+    event = state.get("current_event")
+    if event:
+        event_data = event.get("data", {})
+        event_player = event_data.get("player") or event_data.get("username")
+        event_uuid = event_data.get("uuid")
+        if event_player and event_uuid:
+            # Check if this player is already in the list
+            existing_names = {p.get("username") for p in players}
+            if event_player not in existing_names:
+                # Add event player to the list for enrichment
+                players.append({
+                    "username": event_player,
+                    "uuid": event_uuid,
+                    "health": 20,  # Default full health
+                    "dimension": "Overworld",
+                })
+                logger.info(f"📚 Added event player {event_player} to enrichment (not in game_state yet)")
+
+    logger.info(f"📚 Context enricher: {len(players)} players to enrich")
 
     # Collect UUIDs for batch queries
     for player in players:
@@ -572,27 +592,25 @@ Make a decision.
             trace_id=trace_id,
             prompt_length=len(system_prompt) + len(decision_prompt),
             global_chaos=global_chaos,
-            force_speak=force_speak,
-            force_act=force_act,
         ) as llm_span:
             decision: DecisionOutput = await structured_llm.ainvoke(
                 [SystemMessage(content=system_prompt), HumanMessage(content=decision_prompt)]
             )
 
-            # Enrich span with response data
+            # Apply force flags before logging
+            if force_speak:
+                decision.should_speak = True
+            if force_act:
+                decision.should_act = True
+
+            # Enrich span with final decision (after force flags applied)
             llm_span.set_attributes(
                 intent=decision.intent,
                 targets_count=len(decision.targets),
                 escalation=decision.escalation,
-                should_speak=decision.should_speak,
-                should_act=decision.should_act,
+                speak=decision.should_speak,
+                act=decision.should_act,
             )
-
-        # Apply force flags
-        if force_speak:
-            decision.should_speak = True
-        if force_act:
-            decision.should_act = True
 
         # Cap escalation based on chaos
         if global_chaos > 70:
@@ -739,12 +757,22 @@ Be {mask.value.upper()}! Act now.
             )
             response_text = response.content if response.content else ""
 
-            llm_span.set_attributes(
-                response_length=len(response_text),
-                tool_call_count=tool_call_count,
-                tool_names=",".join(tool_names),
-                response_preview=response_text[:150] if response_text else "",
-            )
+            # If no text response but has broadcast tool call, show that message instead
+            narrative_preview = response_text[:150] if response_text else ""
+            if not narrative_preview and tool_call_count > 0:
+                for tc in response.tool_calls[:3]:
+                    if tc["name"] == "broadcast" and tc.get("args", {}).get("message"):
+                        narrative_preview = tc["args"]["message"][:100]
+                        break
+
+            span_attrs = {
+                "tool_count": tool_call_count,
+                "tools": ",".join(tool_names),
+            }
+            if narrative_preview:
+                span_attrs["narrative"] = narrative_preview
+
+            llm_span.set_attributes(**span_attrs)
 
         planned_actions: list[PlannedAction] = []
         narrative_text = ""
@@ -1055,16 +1083,23 @@ async def tool_executor(
         purpose = action.get("purpose", "unknown")
 
         # Extract key args for tracing (avoid logging sensitive data)
-        target_player = args.get("player") or args.get("near_player") or ""
+        target_player = args.get("player") or args.get("near_player")
         message_preview = args.get("message", "")[:80] if args.get("message") else ""
+
+        # Build span attributes, only include target_player if present
+        span_attrs = {
+            "purpose": purpose,
+            "args_count": len(args),
+        }
+        if target_player:
+            span_attrs["target"] = target_player
+        if message_preview:
+            span_attrs["message"] = message_preview
 
         with span(
             f"tool.execute:{tool_name}:{mask.value}",
             trace_id=trace_id,
-            purpose=purpose,
-            target_player=target_player,
-            message_preview=message_preview,
-            args_count=len(args),
+            **span_attrs,
         ) as tool_span:
             try:
                 # If we have the tool function, invoke it (includes cooldown checks)

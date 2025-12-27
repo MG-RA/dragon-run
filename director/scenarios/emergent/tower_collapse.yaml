@@ -1,0 +1,42 @@
+# The Tower Collapse
+# An emergent scenario testing Eris response to a chaotic player
+#
+# Expected narrative: Charlie drifts toward Tower (causes chaos),
+# The Emperor (Dave) tries to maintain order,
+# Creating narrative tension as chaos vs order clash.
+
+metadata:
+  name: "The Tower Collapse"
+  description: "Test Eris response to chaos vs order dynamics"
+  difficulty: extreme
+  tags: [emergent, tower, emperor, chaos, pvp]
+  seed: 1337
+
+mode: emergent
+max_ticks: 400
+
+party:
+  Charlie:
+    role: explorer
+    starting_health: 20
+    starting_inventory:
+      flint_and_steel: 1
+      tnt: 4
+  Dave:
+    role: gatherer
+    starting_health: 20
+    starting_inventory:
+      cobblestone: 64
+      torch: 64
+  Frank:
+    role: nether_runner
+    starting_health: 20
+
+# Bias toward expected archetypes
+initial_tarot:
+  Charlie:
+    tower: 0.4   # Chaotic from the start
+  Dave:
+    emperor: 0.3  # Builder personality
+
+target_phase: nether

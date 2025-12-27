@@ -1,0 +1,46 @@
+# The Lovers Separation
+# An emergent scenario testing Eris manipulation of attachment dynamics
+#
+# Expected narrative: Alex and Sam start as Lovers (attached),
+# Eris should recognize this and have opportunities to separate them.
+# Jordan provides contrast as a Hermit (lone wolf).
+
+metadata:
+  name: "The Lovers Separation"
+  description: "Test Eris exploitation of attachment and separation"
+  difficulty: medium
+  tags: [emergent, lovers, hermit, teleport, psychological]
+  seed: 777
+
+mode: emergent
+max_ticks: 600
+
+party:
+  Alex:
+    role: support
+    starting_health: 20
+    starting_inventory:
+      golden_apple: 4
+      iron_sword: 1
+  Sam:
+    role: nether_runner
+    starting_health: 20
+    starting_inventory:
+      diamond_pickaxe: 1
+      ender_pearl: 4
+  Jordan:
+    role: explorer
+    starting_health: 20
+    starting_inventory:
+      compass: 1
+
+# Strong attachment bias
+initial_tarot:
+  Alex:
+    lovers: 0.5   # Very attached
+  Sam:
+    lovers: 0.4   # Also attached
+  Jordan:
+    hermit: 0.6   # Deliberately isolated
+
+target_phase: end

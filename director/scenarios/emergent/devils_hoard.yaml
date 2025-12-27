@@ -1,0 +1,48 @@
+# The Devil's Hoard
+# An emergent scenario testing Eris response to resource hoarding
+#
+# Expected narrative: Eve drifts toward Devil (hoards blaze rods),
+# Alice drifts toward Death or Fool (pushes endgame),
+# Bob drifts toward Star or Lovers (helps others).
+# Eris sees "The Devil holding blaze rods" and can punish or exploit.
+
+metadata:
+  name: "The Devil's Hoard"
+  description: "Test Eris response to resource hoarding and scarcity dynamics"
+  difficulty: hard
+  tags: [emergent, devil, scarcity, nether]
+  seed: 42
+
+mode: emergent
+max_ticks: 500
+
+party:
+  Alice:
+    role: nether_runner
+    starting_health: 20
+    starting_inventory:
+      iron_ingot: 10
+      cooked_beef: 16
+  Bob:
+    role: support
+    starting_health: 20
+    starting_inventory:
+      iron_pickaxe: 1
+      torch: 32
+  Eve:
+    role: explorer
+    starting_health: 20
+    starting_inventory:
+      iron_sword: 1
+      golden_apple: 2
+
+# Seed initial tarot weights to bias toward expected narratives
+initial_tarot:
+  Eve:
+    devil: 0.3  # Eve starts leaning Devil
+  Alice:
+    fool: 0.2   # Alice is adventurous
+  Bob:
+    star: 0.2   # Bob is helpful
+
+target_phase: nether

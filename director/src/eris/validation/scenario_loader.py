@@ -17,11 +17,8 @@ import yaml
 from .advancement_graph import find_missing_prerequisites, is_valid_progression
 from .scenario_schema import (
     PARTY_PRESETS,
-    Event,
     PartyPreset,
-    PlayerDefinition,
     Scenario,
-    ScenarioMetadata,
 )
 
 logger = logging.getLogger(__name__)
@@ -53,7 +50,7 @@ def load_scenario(path: Path | str) -> Scenario:
     logger.info(f"Loading scenario from {path}")
 
     # Load YAML
-    with open(path, "r", encoding="utf-8") as f:
+    with open(path, encoding="utf-8") as f:
         raw_data = yaml.safe_load(f)
 
     if not raw_data:
@@ -71,11 +68,11 @@ def load_scenario(path: Path | str) -> Scenario:
             preset = PartyPreset(scenario.party)
             scenario.party = PARTY_PRESETS[preset]
             logger.debug(f"Expanded party preset '{preset}' to {len(scenario.party)} players")
-        except ValueError:
+        except ValueError as e:
             raise ScenarioValidationError(
                 f"Unknown party preset: {scenario.party}. "
                 f"Valid presets: {[p.value for p in PartyPreset]}"
-            )
+            ) from e
 
     # Validate advancement progression
     validate_advancement_sequence(scenario)

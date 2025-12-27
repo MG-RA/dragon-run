@@ -195,7 +195,7 @@ def main():
     llm = ChatOllama(
         model=args.model,
         base_url=args.ollama_host,
-        temperature=0.15,  # Recommended for ministral-3
+        temperature=0.7,  # Recommended for ministral-3
         keep_alive="5m",
     )
 
