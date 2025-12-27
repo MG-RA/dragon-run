@@ -10,32 +10,31 @@ One artery of reality.
 """
 
 import logging
-from typing import Optional, Dict, Any
+from typing import Any
 
-from langgraph.graph import StateGraph, END, START
+from langgraph.graph import END, START, StateGraph
 
-from .state import ErisState, create_initial_state
+from ..core.tension import get_fracture_tracker
+from ..tools.game_tools import create_game_tools
 from .nodes import (
-    event_classifier,
-    context_enricher,
-    mask_selector,
-    decision_node,
     agentic_action,
+    context_enricher,
+    decision_node,
+    event_classifier,
+    mask_selector,
     protection_decision,
     tool_executor,
     trigger_apocalypse,
 )
-from ..tools.game_tools import create_game_tools
-from ..core.tension import get_fracture_tracker
-from ..persona.karma import calculate_total_karma
+from .state import ErisState
 
 logger = logging.getLogger(__name__)
 
 
 def create_graph(
-    db: Optional[object] = None,
-    ws_client: Optional[object] = None,
-    llm: Optional[object] = None,
+    db: object | None = None,
+    ws_client: object | None = None,
+    llm: object | None = None,
 ):
     """
     Build the Eris LangGraph state machine - v1.3 Linear Pipeline with Fracture.
@@ -70,7 +69,7 @@ def create_graph(
     async def _context_enricher(s: ErisState):
         return await context_enricher(s, db)
 
-    async def _fracture_check(s: ErisState) -> Dict[str, Any]:
+    async def _fracture_check(s: ErisState) -> dict[str, Any]:
         """
         Calculate fracture level and check for phase transitions/apocalypse.
         This node updates fracture, phase, and may trigger apocalypse.
@@ -102,7 +101,11 @@ def create_graph(
             # Hack: set total_karma to achieve desired fracture
             # fracture = chaos + fear + karma/10, so karma = (fracture - chaos - fear) * 10
             chaos = fracture_tracker.tension_manager.get_global_chaos()
-            fear = max(fracture_tracker.tension_manager.player_fear.values()) if fracture_tracker.tension_manager.player_fear else 0
+            fear = (
+                max(fracture_tracker.tension_manager.player_fear.values())
+                if fracture_tracker.tension_manager.player_fear
+                else 0
+            )
             required_karma = max(0, (target_fracture - chaos - fear) * 10)
             fracture_tracker.update_total_karma(required_karma)
             return fracture_tracker.get_state_for_graph()
@@ -177,7 +180,7 @@ def create_graph(
 
 def create_graph_for_studio():
     """Create graph for LangGraph Studio (without external dependencies)."""
-    from .state import ErisState, create_initial_state
+    from .state import ErisState
 
     graph = StateGraph(ErisState)
 
@@ -193,6 +196,7 @@ def create_graph_for_studio():
 
     async def test_mask(state):
         from .state import ErisMask
+
         return {"current_mask": ErisMask.TRICKSTER}
 
     async def test_decision(state):

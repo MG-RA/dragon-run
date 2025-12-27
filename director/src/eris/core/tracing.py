@@ -1,9 +1,8 @@
 """Logfire tracing initialization and utilities for Eris AI Director."""
 
+import logging
 import os
 import uuid
-import logging
-from typing import Optional
 
 logger = logging.getLogger(__name__)
 
@@ -88,6 +87,7 @@ class TracingSpan:
         if _initialized:
             try:
                 import logfire
+
                 self._logfire_span = logfire.span(self.name, **self.attributes)
                 self._span = self._logfire_span.__enter__()
                 return self

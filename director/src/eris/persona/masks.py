@@ -1,60 +1,49 @@
 """Eris personality masks and their characteristics."""
 
-from typing import Dict, Any, List
-from ..graph.state import ErisMask, MaskConfig
+from typing import Any
 
+from ..graph.state import ErisMask, MaskConfig
 
 # === Tool Group Definitions ===
 # Maps tool groups to actual tool names
 
-TOOL_GROUP_MAPPING: Dict[str, List[str]] = {
+TOOL_GROUP_MAPPING: dict[str, list[str]] = {
     # Communication
     "broadcast": ["broadcast"],
     "whisper": ["message_player"],
-
     # Movement/Position
     "teleport": ["teleport_player"],
     "look_at": ["force_look_at"],
-
     # Visual Effects
     "particles": ["spawn_particles"],
     "particles_friendly": ["spawn_particles"],  # Subset: heart, happy_villager
     "fireworks": ["launch_firework"],
     "title": ["show_title"],
-
     # Audio
     "sounds": ["play_sound"],
-
     # Weather/Environment
     "weather": ["change_weather"],
     "lightning": ["strike_lightning"],
-
     # Mob Spawning
-    "mobs_light": ["spawn_mob"],   # 1-2 mobs, weaker types
-    "mobs_heavy": ["spawn_mob"],   # 5+ mobs, dangerous types
-
+    "mobs_light": ["spawn_mob"],  # 1-2 mobs, weaker types
+    "mobs_heavy": ["spawn_mob"],  # 5+ mobs, dangerous types
     # Hazards
     "tnt": ["spawn_tnt"],
     "falling_blocks": ["spawn_falling_block"],
-
     # Player Effects
     "effects_positive": ["apply_effect"],  # speed, strength, resistance
-    "effects_mild": ["apply_effect"],      # slowness, glowing
-    "effects_harmful": ["apply_effect"],   # poison, wither, weakness
-    "effects_random": ["apply_effect"],    # coin flip
-
+    "effects_mild": ["apply_effect"],  # slowness, glowing
+    "effects_harmful": ["apply_effect"],  # poison, wither, weakness
+    "effects_random": ["apply_effect"],  # coin flip
     # Items
-    "items_helpful": ["give_item"],        # food, tools
-    "items_trick": ["give_item"],          # useless/cursed items
-    "items_random": ["give_item"],         # random selection
-
+    "items_helpful": ["give_item"],  # food, tools
+    "items_trick": ["give_item"],  # useless/cursed items
+    "items_random": ["give_item"],  # random selection
     # Health/Protection
     "heal": ["heal_player", "protect_player", "rescue_teleport"],
     "damage": ["damage_player"],
-
     # Deception
     "fake_death": ["fake_death"],
-
     # Karma
     "aura": ["modify_aura"],
 }
@@ -63,47 +52,78 @@ TOOL_GROUP_MAPPING: Dict[str, List[str]] = {
 # === Mask Tool Groups ===
 # Defines which tool groups each mask prefers and avoids
 
-MASK_TOOL_GROUPS: Dict[str, Dict[str, List[str]]] = {
+MASK_TOOL_GROUPS: dict[str, dict[str, list[str]]] = {
     "TRICKSTER": {
         "allowed": [
-            "teleport", "fake_death", "particles", "sounds",
-            "effects_mild", "items_trick", "whisper", "broadcast",
-            "fireworks", "title", "look_at"
+            "teleport",
+            "fake_death",
+            "particles",
+            "sounds",
+            "effects_mild",
+            "items_trick",
+            "whisper",
+            "broadcast",
+            "fireworks",
+            "title",
+            "look_at",
         ],
         "discouraged": ["damage", "mobs_heavy", "tnt", "effects_harmful"],
     },
     "PROPHET": {
         "allowed": [
-            "sounds", "particles", "title", "weather", "look_at",
-            "broadcast", "whisper", "lightning"
+            "sounds",
+            "particles",
+            "title",
+            "weather",
+            "look_at",
+            "broadcast",
+            "whisper",
+            "lightning",
         ],
         "discouraged": ["damage", "teleport", "mobs_heavy", "tnt", "items_helpful"],
     },
     "FRIEND": {
         "allowed": [
-            "items_helpful", "heal", "effects_positive", "particles_friendly",
-            "broadcast", "whisper", "fireworks"
+            "items_helpful",
+            "heal",
+            "effects_positive",
+            "particles_friendly",
+            "broadcast",
+            "whisper",
+            "fireworks",
         ],
         "discouraged": ["damage", "mobs_heavy", "tnt", "effects_harmful", "fake_death"],
     },
     "CHAOS_BRINGER": {
         "allowed": [
-            "mobs_heavy", "mobs_light", "tnt", "lightning", "damage",
-            "falling_blocks", "effects_harmful", "sounds", "broadcast",
-            "title", "weather"
+            "mobs_heavy",
+            "mobs_light",
+            "tnt",
+            "lightning",
+            "damage",
+            "falling_blocks",
+            "effects_harmful",
+            "sounds",
+            "broadcast",
+            "title",
+            "weather",
         ],
         "discouraged": ["heal", "items_helpful", "effects_positive"],
     },
     "OBSERVER": {
-        "allowed": [
-            "sounds", "particles", "look_at", "broadcast", "whisper"
-        ],
+        "allowed": ["sounds", "particles", "look_at", "broadcast", "whisper"],
         "discouraged": ["damage", "mobs_heavy", "tnt", "teleport", "heal", "items_helpful"],
     },
     "GAMBLER": {
         "allowed": [
-            "items_random", "teleport", "effects_random", "aura",
-            "broadcast", "whisper", "title", "sounds"
+            "items_random",
+            "teleport",
+            "effects_random",
+            "aura",
+            "broadcast",
+            "whisper",
+            "title",
+            "sounds",
         ],
         "discouraged": ["mobs_heavy", "tnt"],
     },
@@ -113,13 +133,13 @@ MASK_TOOL_GROUPS: Dict[str, Dict[str, List[str]]] = {
 # === Mask Karma Fields ===
 # Maps each mask to its karma type for the karma vector system
 
-MASK_KARMA_FIELDS: Dict[str, str] = {
-    "TRICKSTER": "irony",         # Renamed from prank_karma
-    "PROPHET": "doom",            # Renamed from doom_karma
-    "FRIEND": "betrayal",         # Renamed from betrayal_karma
-    "CHAOS_BRINGER": "wrath",     # Renamed from wrath_karma
+MASK_KARMA_FIELDS: dict[str, str] = {
+    "TRICKSTER": "irony",  # Renamed from prank_karma
+    "PROPHET": "doom",  # Renamed from doom_karma
+    "FRIEND": "betrayal",  # Renamed from betrayal_karma
+    "CHAOS_BRINGER": "wrath",  # Renamed from wrath_karma
     "OBSERVER": "inevitability",  # Renamed from silence_karma
-    "GAMBLER": "risk",            # Renamed from risk_karma
+    "GAMBLER": "risk",  # Renamed from risk_karma
 }
 
 
@@ -127,7 +147,7 @@ MASK_KARMA_FIELDS: Dict[str, str] = {
 # Maps tool groups to per-mask severity levels: "severe" (block), "moderate" (warn), "minor" (soft)
 # Tools not listed default to "minor" if in discouraged list, "none" otherwise
 
-TOOL_SEVERITY: Dict[str, Dict[str, str]] = {
+TOOL_SEVERITY: dict[str, dict[str, str]] = {
     # Healing/protection tools
     "heal_player": {
         "CHAOS_BRINGER": "severe",  # CHAOS_BRINGER healing is completely out of character
@@ -187,7 +207,7 @@ def get_tool_violation_severity(mask: ErisMask, tool: str, karma: int = 0) -> st
 
 # === Base Mask Traits ===
 
-MASK_TRAITS: Dict[ErisMask, Dict[str, Any]] = {
+MASK_TRAITS: dict[ErisMask, dict[str, Any]] = {
     ErisMask.TRICKSTER: {
         "tone": "playful, teasing, gleefully deceitful",
         "behaviors": ["pranks", "misdirection", "baited gifts", "false danger"],
@@ -267,9 +287,9 @@ def get_mask_description(mask: ErisMask) -> str:
     """Get a description of a personality mask for prompts."""
     traits = MASK_TRAITS[mask]
     return f"""
-Your current mask is THE {mask.value.upper()} - {traits['tone']}.
-Common behaviors: {', '.join(traits['behaviors'])}
-Typical phrases: {', '.join(traits['speech_patterns'][:2])}
+Your current mask is THE {mask.value.upper()} - {traits["tone"]}.
+Common behaviors: {", ".join(traits["behaviors"])}
+Typical phrases: {", ".join(traits["speech_patterns"][:2])}
 """
 
 
@@ -289,12 +309,12 @@ def get_mask_config(mask: ErisMask) -> MaskConfig:
     )
 
 
-def get_tools_for_group(group: str) -> List[str]:
+def get_tools_for_group(group: str) -> list[str]:
     """Get the actual tool names for a tool group."""
     return TOOL_GROUP_MAPPING.get(group, [])
 
 
-def get_all_allowed_tools(mask: ErisMask) -> List[str]:
+def get_all_allowed_tools(mask: ErisMask) -> list[str]:
     """Get all tool names allowed for a mask."""
     mask_name = mask.name
     tool_groups = MASK_TOOL_GROUPS.get(mask_name, {"allowed": []})
@@ -304,7 +324,7 @@ def get_all_allowed_tools(mask: ErisMask) -> List[str]:
     return list(set(tools))  # Deduplicate
 
 
-def get_all_discouraged_tools(mask: ErisMask) -> List[str]:
+def get_all_discouraged_tools(mask: ErisMask) -> list[str]:
     """Get all tool names discouraged for a mask."""
     mask_name = mask.name
     tool_groups = MASK_TOOL_GROUPS.get(mask_name, {"discouraged": []})

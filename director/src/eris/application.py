@@ -9,7 +9,7 @@ import sys
 from dataclasses import dataclass, field
 from enum import Enum
 from pathlib import Path
-from typing import Any, Callable, Optional
+from typing import Any
 
 from langchain_ollama import ChatOllama
 
@@ -22,12 +22,12 @@ from eris.core.websocket import GameStateClient
 from eris.graph.builder import create_graph
 from eris.graph.state import ErisMask, EventPriority
 
-
 logger = logging.getLogger("eris")
 
 
 class AppState(Enum):
     """Application lifecycle states."""
+
     CREATED = "created"
     STARTING = "starting"
     RUNNING = "running"
@@ -39,23 +39,25 @@ class AppState(Enum):
 @dataclass
 class GameContext:
     """Current game state tracking."""
+
     state: dict = field(default_factory=dict)
     last_logged_players: list = field(default_factory=list)
-    last_logged_game_state: Optional[str] = None
+    last_logged_game_state: str | None = None
     last_intervention_time: float = 0.0
 
 
 @dataclass
 class Services:
     """Container for all application services."""
+
     config: ErisConfig
     database: Database
     llm: ChatOllama
     event_processor: EventProcessor
     short_memory: ShortTermMemory
     long_memory: LongTermMemory
-    ws_client: Optional[GameStateClient] = None
-    graph: Optional[Any] = None  # LangGraph CompiledGraph
+    ws_client: GameStateClient | None = None
+    graph: Any | None = None  # LangGraph CompiledGraph
 
     @property
     def db_available(self) -> bool:
@@ -80,7 +82,7 @@ class ErisApplication:
         self.config = config
         self.base_dir = base_dir
         self.state = AppState.CREATED
-        self.services: Optional[Services] = None
+        self.services: Services | None = None
         self.game_context = GameContext()
         self._shutdown_event = asyncio.Event()
         self._tasks: list[asyncio.Task] = []
@@ -101,15 +103,12 @@ class ErisApplication:
             # Database
             db = Database(self.config.database.model_dump())
             try:
-                await asyncio.wait_for(
-                    db.connect(),
-                    timeout=self.config.database.connect_timeout
-                )
+                await asyncio.wait_for(db.connect(), timeout=self.config.database.connect_timeout)
                 logger.info(
                     f"Database connected: {self.config.database.host}:"
                     f"{self.config.database.port}/{self.config.database.database}"
                 )
-            except asyncio.TimeoutError:
+            except TimeoutError:
                 logger.warning("Database connection timed out, continuing without DB")
             except Exception as e:
                 logger.warning(f"Database connection failed: {e}")
@@ -135,9 +134,7 @@ class ErisApplication:
             event_processor = EventProcessor(debounce_config)
 
             # Memory
-            short_memory = ShortTermMemory(
-                max_tokens=self.config.memory.short_term_max_tokens
-            )
+            short_memory = ShortTermMemory(max_tokens=self.config.memory.short_term_max_tokens)
             long_memory = LongTermMemory(db)
 
             # Create services container
@@ -191,14 +188,8 @@ class ErisApplication:
 
         try:
             # Create concurrent tasks
-            ws_task = asyncio.create_task(
-                self._run_websocket_with_backoff(),
-                name="websocket"
-            )
-            idle_task = asyncio.create_task(
-                self._run_periodic_idle_check(),
-                name="idle_check"
-            )
+            ws_task = asyncio.create_task(self._run_websocket_with_backoff(), name="websocket")
+            idle_task = asyncio.create_task(self._run_periodic_idle_check(), name="idle_check")
             self._tasks = [ws_task, idle_task]
 
             # Wait for shutdown signal or task failure
@@ -231,7 +222,7 @@ class ErisApplication:
                 task.cancel()
                 try:
                     await asyncio.wait_for(task, timeout=5.0)
-                except (asyncio.CancelledError, asyncio.TimeoutError):
+                except (TimeoutError, asyncio.CancelledError):
                     pass
 
         # Cleanup services
@@ -282,6 +273,7 @@ class ErisApplication:
 
                 # Apply exponential backoff with jitter
                 import random
+
                 actual_delay = delay * (1 + random.uniform(-jitter, jitter))
                 logger.info(f"Reconnecting in {actual_delay:.1f}s...")
                 await asyncio.sleep(actual_delay)
@@ -320,7 +312,7 @@ class ErisApplication:
                         "data": {
                             "idle_duration": idle_duration,
                             "player_count": len(players),
-                        }
+                        },
                     }
 
                     await self._on_event(idle_event, is_idle_check=True)
@@ -339,8 +331,10 @@ class ErisApplication:
         player_names = [p.get("username", "?") for p in players]
         game_state = data.get("gameState")
 
-        if (player_names != self.game_context.last_logged_players or
-                game_state != self.game_context.last_logged_game_state):
+        if (
+            player_names != self.game_context.last_logged_players
+            or game_state != self.game_context.last_logged_game_state
+        ):
             logger.info(f"State update: {game_state}, {len(players)} players: {player_names}")
             self.game_context.last_logged_players = player_names
             self.game_context.last_logged_game_state = game_state
@@ -350,10 +344,7 @@ class ErisApplication:
         event_type = data.get("eventType", "unknown")
         trace_id = generate_trace_id()
 
-        event_data = {
-            "eventType": event_type,
-            "data": data.get("data", {})
-        }
+        event_data = {"eventType": event_type, "data": data.get("data", {})}
 
         # Extract player info for tracing
         event_player = data.get("data", {}).get("player", data.get("data", {}).get("username", ""))
@@ -393,7 +384,7 @@ class ErisApplication:
                     "events_this_run": [],
                     "actions_taken": [],
                     "last_speech_time": 0,
-                    "intervention_count": 0
+                    "intervention_count": 0,
                 },
                 "current_mask": ErisMask.TRICKSTER,
                 "mask_stability": self.config.eris.mask_stability,
@@ -408,12 +399,14 @@ class ErisApplication:
 
             # Invoke the graph with timeout
             try:
-                with span("graph.invoke", trace_id=trace_id, timeout=self.config.graph.invoke_timeout) as graph_span:
+                with span(
+                    "graph.invoke", trace_id=trace_id, timeout=self.config.graph.invoke_timeout
+                ) as graph_span:
                     logger.info(f"Processing event: {event_type} [trace:{trace_id}]")
 
                     result = await asyncio.wait_for(
                         self.services.graph.ainvoke(initial_state),
-                        timeout=self.config.graph.invoke_timeout
+                        timeout=self.config.graph.invoke_timeout,
                     )
 
                     # Enrich span with result data
@@ -421,7 +414,9 @@ class ErisApplication:
                     script = result.get("script") or {}
                     approved_actions = result.get("approved_actions") or []
                     graph_span.set_attributes(
-                        mask=result.get("current_mask", "").value if hasattr(result.get("current_mask", ""), "value") else str(result.get("current_mask", "")),
+                        mask=result.get("current_mask", "").value
+                        if hasattr(result.get("current_mask", ""), "value")
+                        else str(result.get("current_mask", "")),
                         phase=result.get("phase", ""),
                         fracture=result.get("fracture", 0),
                         intent=decision.get("intent", ""),
@@ -429,7 +424,9 @@ class ErisApplication:
                         should_act=decision.get("should_act", False),
                         escalation=decision.get("escalation", 0),
                         targets=",".join(decision.get("targets", [])),
-                        narrative=script.get("narrative_text", "")[:100] if script.get("narrative_text") else "",
+                        narrative=script.get("narrative_text", "")[:100]
+                        if script.get("narrative_text")
+                        else "",
                         actions_planned=len(script.get("planned_actions", [])),
                         actions_approved=len(approved_actions),
                     )
@@ -440,7 +437,9 @@ class ErisApplication:
                     if result.get("should_speak") or result.get("should_intervene"):
                         self.game_context.last_intervention_time = asyncio.get_event_loop().time()
 
-            except asyncio.TimeoutError:
-                logger.error(f"Graph timeout after {self.config.graph.invoke_timeout}s for: {event_type} [trace:{trace_id}]")
+            except TimeoutError:
+                logger.error(
+                    f"Graph timeout after {self.config.graph.invoke_timeout}s for: {event_type} [trace:{trace_id}]"
+                )
             except Exception as e:
                 logger.error(f"Graph error: {e} [trace:{trace_id}]", exc_info=True)

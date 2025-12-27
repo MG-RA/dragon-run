@@ -19,6 +19,7 @@ load_dotenv(BASE_DIR / ".env", override=True)
 
 # Initialize tracing early (before other eris imports)
 from eris.core.tracing import init_tracing
+
 _tracing_enabled = init_tracing()
 
 
@@ -56,9 +57,7 @@ def setup_logging(log_dir: Path, level: str = "INFO", json_mode: bool = False) -
 
         formatter = JsonFormatter()
     else:
-        formatter = logging.Formatter(
-            "%(asctime)s | %(name)s | %(levelname)s | %(message)s"
-        )
+        formatter = logging.Formatter("%(asctime)s | %(name)s | %(levelname)s | %(message)s")
 
     for handler in handlers:
         handler.setFormatter(formatter)
@@ -74,8 +73,8 @@ def setup_logging(log_dir: Path, level: str = "INFO", json_mode: bool = False) -
 
 async def main() -> None:
     """Main entry point for Eris AI Director."""
-    from eris.config import ErisConfig
     from eris.application import ErisApplication
+    from eris.config import ErisConfig
 
     # Load and validate configuration
     config_path = BASE_DIR / "config.yaml"

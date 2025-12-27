@@ -1,7 +1,6 @@
 """Async PostgreSQL client for player history."""
 
 import logging
-from typing import Dict, Optional
 
 import asyncpg
 
@@ -15,7 +14,7 @@ class Database:
 
     def __init__(self, config: dict):
         self.config = config
-        self.pool: Optional[asyncpg.Pool] = None
+        self.pool: asyncpg.Pool | None = None
 
     async def connect(self):
         """Create connection pool."""
@@ -40,7 +39,7 @@ class Database:
             await self.pool.close()
             logger.info("Database connection closed")
 
-    async def get_player_summary(self, uuid: str) -> Dict:
+    async def get_player_summary(self, uuid: str) -> dict:
         """Get player's history summary for context."""
         if not self.pool:
             logger.warning("Database not connected")
@@ -69,7 +68,7 @@ class Database:
                 logger.error(f"Error fetching player summary: {e}")
                 return {}
 
-    async def get_player_nemesis(self, uuid: str) -> Optional[str]:
+    async def get_player_nemesis(self, uuid: str) -> str | None:
         """Get what kills this player most often."""
         if not self.pool:
             return None
@@ -115,7 +114,7 @@ class Database:
             logger.error(f"Error fetching recent runs: {e}")
             return []
 
-    async def get_player_recent_performance(self, uuid: str, limit: int = 5) -> Dict:
+    async def get_player_recent_performance(self, uuid: str, limit: int = 5) -> dict:
         """Get player's recent run performance for trend analysis."""
         if not self.pool:
             return {}
@@ -171,7 +170,7 @@ class Database:
             logger.error(f"Error fetching player recent performance: {e}")
             return {}
 
-    async def get_player_personal_bests(self, uuid: str) -> Dict:
+    async def get_player_personal_bests(self, uuid: str) -> dict:
         """Get player's personal best records."""
         if not self.pool:
             return {}
@@ -225,7 +224,7 @@ class Database:
     # === Karma Methods (v1.3 - renamed from betrayal debt) ===
     # Note: Database table is still eris_betrayal_debt for backwards compatibility
 
-    async def get_player_karma(self, uuid: str) -> Dict[str, int]:
+    async def get_player_karma(self, uuid: str) -> dict[str, int]:
         """Get all karma values for a player, keyed by mask type."""
         if not self.pool:
             return {}
@@ -270,7 +269,7 @@ class Database:
             logger.error(f"Error updating player karma: {e}")
             return 0
 
-    async def get_all_player_karmas(self, uuids: list) -> Dict[str, Dict[str, int]]:
+    async def get_all_player_karmas(self, uuids: list) -> dict[str, dict[str, int]]:
         """Get karma values for multiple players at once."""
         if not self.pool or not uuids:
             return {}
@@ -284,7 +283,7 @@ class Database:
             try:
                 async with self.pool.acquire() as conn:
                     rows = await conn.fetch(query, uuids)
-                    result: Dict[str, Dict[str, int]] = {}
+                    result: dict[str, dict[str, int]] = {}
                     for row in rows:
                         player_uuid = row["player_uuid"]
                         if player_uuid not in result:
@@ -296,7 +295,7 @@ class Database:
                 return {}
 
     # Backwards compatibility aliases
-    async def get_betrayal_debts(self, uuid: str) -> Dict[str, int]:
+    async def get_betrayal_debts(self, uuid: str) -> dict[str, int]:
         """Alias for get_player_karma (backwards compatibility)."""
         return await self.get_player_karma(uuid)
 
@@ -304,7 +303,7 @@ class Database:
         """Alias for update_player_karma (backwards compatibility)."""
         return await self.update_player_karma(uuid, mask_type, delta)
 
-    async def get_all_player_debts(self, uuids: list) -> Dict[str, Dict[str, int]]:
+    async def get_all_player_debts(self, uuids: list) -> dict[str, dict[str, int]]:
         """Alias for get_all_player_karmas (backwards compatibility)."""
         return await self.get_all_player_karmas(uuids)
 
@@ -338,8 +337,8 @@ class Database:
             return []
 
     async def create_prophecy(
-        self, uuid: str, text: str, prophecy_type: str, run_id: Optional[int] = None
-    ) -> Optional[int]:
+        self, uuid: str, text: str, prophecy_type: str, run_id: int | None = None
+    ) -> int | None:
         """Create a new prophecy for a player. Returns the prophecy ID."""
         if not self.pool:
             return None
@@ -376,7 +375,7 @@ class Database:
             logger.error(f"Error fulfilling prophecy: {e}")
             return False
 
-    async def get_all_active_prophecies(self, uuids: list) -> Dict[str, list]:
+    async def get_all_active_prophecies(self, uuids: list) -> dict[str, list]:
         """Get active prophecies for multiple players at once."""
         if not self.pool or not uuids:
             return {}
@@ -391,17 +390,19 @@ class Database:
             try:
                 async with self.pool.acquire() as conn:
                     rows = await conn.fetch(query, uuids)
-                    result: Dict[str, list] = {}
+                    result: dict[str, list] = {}
                     for row in rows:
                         player_uuid = row["player_uuid"]
                         if player_uuid not in result:
                             result[player_uuid] = []
-                        result[player_uuid].append({
-                            "id": row["id"],
-                            "text": row["prophecy_text"],
-                            "type": row["prophecy_type"],
-                            "created_at": row["created_at"],
-                        })
+                        result[player_uuid].append(
+                            {
+                                "id": row["id"],
+                                "text": row["prophecy_text"],
+                                "type": row["prophecy_type"],
+                                "created_at": row["created_at"],
+                            }
+                        )
                     return result
             except Exception as e:
                 logger.error(f"Error fetching all active prophecies: {e}")
@@ -435,7 +436,13 @@ class Database:
         try:
             async with self.pool.acquire() as conn:
                 await conn.execute(
-                    query, run_id, peak_chaos, total_interventions, protections_used, respawns_used, final_chaos
+                    query,
+                    run_id,
+                    peak_chaos,
+                    total_interventions,
+                    protections_used,
+                    respawns_used,
+                    final_chaos,
                 )
                 return True
         except Exception as e:

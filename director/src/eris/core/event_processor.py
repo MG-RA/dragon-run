@@ -6,7 +6,7 @@ import logging
 from collections import deque
 from dataclasses import dataclass, field
 from datetime import datetime
-from typing import Any, Dict, Optional
+from typing import Any
 
 from ..graph.state import EventPriority
 
@@ -19,7 +19,7 @@ class PrioritizedEvent:
 
     priority: int
     timestamp: float
-    event: Dict[str, Any] = field(compare=False)
+    event: dict[str, Any] = field(compare=False)
 
 
 class EventProcessor:
@@ -38,7 +38,7 @@ class EventProcessor:
         "eris_close_call": 10.0,  # Prevent spam from DOT effects (poison/wither)
     }
 
-    def __init__(self, config: Optional[Dict[str, float]] = None):
+    def __init__(self, config: dict[str, float] | None = None):
         """Initialize event processor.
 
         Args:
@@ -68,9 +68,7 @@ class EventProcessor:
             self._add_to_chat_buffer(event)
             heapq.heappush(
                 self.event_queue,
-                PrioritizedEvent(
-                    priority=EventPriority.HIGH.value, timestamp=now, event=event
-                ),
+                PrioritizedEvent(priority=EventPriority.HIGH.value, timestamp=now, event=event),
             )
             logger.debug(f"💬 Chat event queued from {event.get('data', {}).get('player')}")
             return True
@@ -95,7 +93,7 @@ class EventProcessor:
         logger.debug(f"📥 Event queued: {event_type} (priority: {priority.name})")
         return True
 
-    async def get_next_event(self) -> Optional[dict]:
+    async def get_next_event(self) -> dict | None:
         """Get highest priority event from queue."""
         async with self._lock:
             if not self.event_queue:

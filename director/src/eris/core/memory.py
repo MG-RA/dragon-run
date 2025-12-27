@@ -3,7 +3,6 @@
 import logging
 from collections import deque
 from datetime import datetime
-from typing import Optional, Dict
 
 logger = logging.getLogger(__name__)
 
@@ -159,7 +158,9 @@ class ShortTermMemory:
                 player = data.get("player", "Unknown")
                 health = data.get("healthAfter", 0)
                 source = data.get("source", "unknown")
-                lines.append(f"⚠️ {player} nearly died to {source}! (health: {health}) [ERIS-CAUSED]")
+                lines.append(
+                    f"⚠️ {player} nearly died to {source}! (health: {health}) [ERIS-CAUSED]"
+                )
             elif event_type == "eris_caused_death":
                 player = data.get("player", "Unknown")
                 cause = data.get("cause", "unknown")
@@ -178,7 +179,7 @@ class ShortTermMemory:
 
     def get_context_with_tension(
         self,
-        player_fear: Optional[Dict[str, int]] = None,
+        player_fear: dict[str, int] | None = None,
         global_chaos: int = 0,
     ) -> str:
         """
@@ -201,11 +202,7 @@ class ShortTermMemory:
             tension_lines.append(f"🌀 Global Chaos: {global_chaos}/100 ({chaos_label})")
 
         if player_fear:
-            high_fear_players = [
-                f"{p}: {f}"
-                for p, f in player_fear.items()
-                if f >= 30
-            ]
+            high_fear_players = [f"{p}: {f}" for p, f in player_fear.items() if f >= 30]
             if high_fear_players:
                 tension_lines.append(f"😨 Elevated Fear: {', '.join(high_fear_players)}")
 

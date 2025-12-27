@@ -6,8 +6,9 @@ import logging
 import random
 import time
 import uuid
+from collections.abc import Callable
 from dataclasses import dataclass, field
-from typing import Any, Callable, Dict, Optional, Tuple
+from typing import Any
 
 import websockets
 from websockets.client import WebSocketClientProtocol
@@ -47,20 +48,16 @@ AVAILABLE TOOLS (use these exact names):
 @dataclass
 class PendingCommand:
     """Tracks a pending command awaiting result."""
+
     future: asyncio.Future
-    command_data: Dict[str, Any]
+    command_data: dict[str, Any]
     created_at: float = field(default_factory=time.time)
 
 
 class ReconnectBackoff:
     """Exponential backoff with jitter for reconnection."""
 
-    def __init__(
-        self,
-        base_delay: float = 1.0,
-        max_delay: float = 30.0,
-        jitter: float = 0.1
-    ):
+    def __init__(self, base_delay: float = 1.0, max_delay: float = 30.0, jitter: float = 0.1):
         self.base_delay = base_delay
         self.max_delay = max_delay
         self.jitter = jitter
@@ -68,7 +65,7 @@ class ReconnectBackoff:
 
     def next_delay(self) -> float:
         """Get next delay and increment attempt counter."""
-        delay = min(self.base_delay * (2 ** self._attempt), self.max_delay)
+        delay = min(self.base_delay * (2**self._attempt), self.max_delay)
         # Add jitter: +/- jitter%
         jitter_range = delay * self.jitter
         delay += random.uniform(-jitter_range, jitter_range)
@@ -101,32 +98,32 @@ class GameStateClient:
         uri: str,
         on_state_update: Callable,
         on_event: Callable,
-        config: Optional[WebSocketConfig] = None
+        config: WebSocketConfig | None = None,
     ):
         self.uri = uri
-        self.websocket: Optional[WebSocketClientProtocol] = None
+        self.websocket: WebSocketClientProtocol | None = None
         self.on_state_update = on_state_update
         self.on_event = on_event
         self.running = False
         self._config = config or WebSocketConfig()
 
         # Command queue for ordered sending
-        self._command_queue: asyncio.Queue[Dict[str, Any]] = asyncio.Queue()
-        self._sender_task: Optional[asyncio.Task] = None
+        self._command_queue: asyncio.Queue[dict[str, Any]] = asyncio.Queue()
+        self._sender_task: asyncio.Task | None = None
 
         # Track pending commands for result correlation
-        self._pending_commands: Dict[str, PendingCommand] = {}
+        self._pending_commands: dict[str, PendingCommand] = {}
         self._command_counter = 0
         self._sequence_counter = 0
 
         # Track failed commands for retry logic
-        self._failed_commands: list[Tuple[str, Dict[str, Any], str]] = []
+        self._failed_commands: list[tuple[str, dict[str, Any], str]] = []
 
         # Reconnection backoff
         self._backoff = ReconnectBackoff(
             base_delay=self._config.reconnect_base_delay,
             max_delay=self._config.reconnect_max_delay,
-            jitter=self._config.reconnect_jitter
+            jitter=self._config.reconnect_jitter,
         )
 
     async def connect(self):
@@ -171,7 +168,9 @@ class GameStateClient:
 
             except websockets.ConnectionClosed as e:
                 delay = self._backoff.next_delay()
-                logger.warning(f"Connection closed (code={e.code}), reconnecting in {delay:.1f}s...")
+                logger.warning(
+                    f"Connection closed (code={e.code}), reconnecting in {delay:.1f}s..."
+                )
                 self.websocket = None
                 await asyncio.sleep(delay)
             except Exception as e:
@@ -186,11 +185,8 @@ class GameStateClient:
             try:
                 # Wait for command with timeout to allow checking running flag
                 try:
-                    command_data = await asyncio.wait_for(
-                        self._command_queue.get(),
-                        timeout=1.0
-                    )
-                except asyncio.TimeoutError:
+                    command_data = await asyncio.wait_for(self._command_queue.get(), timeout=1.0)
+                except TimeoutError:
                     continue
 
                 if self.websocket:
@@ -216,7 +212,7 @@ class GameStateClient:
                 logger.error(f"Command sender error: {e}")
                 await asyncio.sleep(0.1)
 
-    async def _handle_message(self, data: Dict[str, Any]):
+    async def _handle_message(self, data: dict[str, Any]):
         """Route incoming messages to appropriate handlers."""
         msg_type = data.get("type")
 
@@ -231,7 +227,7 @@ class GameStateClient:
         else:
             logger.warning(f"Unknown message type: {msg_type}")
 
-    async def _handle_command_result(self, data: Dict[str, Any]):
+    async def _handle_command_result(self, data: dict[str, Any]):
         """Handle command result from server."""
         success = data.get("success", False)
         message = data.get("message", "")
@@ -251,7 +247,7 @@ class GameStateClient:
             if "Unknown command" in message:
                 self._failed_commands.append((message, data.get("original_command", {}), message))
 
-    async def _handle_command_replay(self, data: Dict[str, Any]):
+    async def _handle_command_replay(self, data: dict[str, Any]):
         """Handle replayed commands from server after reconnect."""
         command_id = data.get("command_id")
         original_timestamp = data.get("original_timestamp", 0)
@@ -266,7 +262,7 @@ class GameStateClient:
             logger.debug(f"Fire-and-forget command {command_id} being retried by server")
 
     async def send_command(
-        self, command: str, parameters: Dict[str, Any], reason: str = ""
+        self, command: str, parameters: dict[str, Any], reason: str = ""
     ) -> bool:
         """Queue a command for sending (fire and forget).
 
@@ -296,8 +292,12 @@ class GameStateClient:
         return True
 
     async def send_command_with_result(
-        self, command: str, parameters: Dict[str, Any], reason: str = "", timeout: Optional[float] = None
-    ) -> Dict[str, Any]:
+        self,
+        command: str,
+        parameters: dict[str, Any],
+        reason: str = "",
+        timeout: float | None = None,
+    ) -> dict[str, Any]:
         """
         Queue a command and wait for the result.
 
@@ -333,10 +333,7 @@ class GameStateClient:
             }
 
             # Store pending command with its data (for potential replay)
-            self._pending_commands[command_id] = PendingCommand(
-                future=future,
-                command_data=message
-            )
+            self._pending_commands[command_id] = PendingCommand(future=future, command_data=message)
 
             await self._command_queue.put(message)
             logger.debug(f"Queued command (awaiting): {command} | {parameters}")
@@ -345,7 +342,7 @@ class GameStateClient:
             try:
                 result = await asyncio.wait_for(future, timeout=timeout)
                 return result
-            except asyncio.TimeoutError:
+            except TimeoutError:
                 # Clean up pending command
                 self._pending_commands.pop(command_id, None)
                 logger.warning(f"Command timeout: {command}")
@@ -360,7 +357,7 @@ class GameStateClient:
         """Get the available tools prompt for LLM retry."""
         return AVAILABLE_TOOLS
 
-    def get_failed_commands(self) -> list[Tuple[str, Dict[str, Any], str]]:
+    def get_failed_commands(self) -> list[tuple[str, dict[str, Any], str]]:
         """Get list of failed commands since last check and clear the list."""
         failed = self._failed_commands.copy()
         self._failed_commands.clear()

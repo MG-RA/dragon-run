@@ -10,6 +10,7 @@ The routing functions are no longer used but preserved for reference.
 """
 
 import logging
+
 from ..graph.state import ErisState, EventPriority
 
 logger = logging.getLogger(__name__)
@@ -66,6 +67,7 @@ def route_after_fast_response(state: ErisState) -> str:
 
 
 # === Utility Functions ===
+
 
 def should_skip_low_priority(state: ErisState) -> bool:
     """

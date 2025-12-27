@@ -1,7 +1,6 @@
 """Configuration models with validation for Eris AI Director."""
 
 from pathlib import Path
-from typing import Optional
 
 from pydantic import BaseModel, Field, field_validator
 from pydantic_settings import BaseSettings
@@ -9,6 +8,7 @@ from pydantic_settings import BaseSettings
 
 class WebSocketConfig(BaseModel):
     """WebSocket connection settings."""
+
     uri: str = "ws://localhost:8765"
     # Reconnection settings (exponential backoff)
     reconnect_base_delay: float = Field(default=1.0, ge=0.5, le=10.0)
@@ -24,6 +24,7 @@ class WebSocketConfig(BaseModel):
 
 class DatabaseConfig(BaseModel):
     """PostgreSQL database settings."""
+
     host: str = "localhost"
     port: int = Field(default=5432, ge=1, le=65535)
     database: str = "dragonrun"
@@ -36,6 +37,7 @@ class DatabaseConfig(BaseModel):
 
 class OllamaConfig(BaseModel):
     """Ollama LLM settings."""
+
     host: str = "http://localhost:11434"
     model: str = "ministral-3:14b"
     temperature: float = Field(default=0.15, ge=0.0, le=2.0)
@@ -46,6 +48,7 @@ class OllamaConfig(BaseModel):
 
 class DebounceConfig(BaseModel):
     """Event debouncing settings."""
+
     state: float = Field(default=15.0, ge=1.0, le=60.0)
     player_damaged: float = Field(default=5.0, ge=1.0, le=30.0)
     resource_milestone: float = Field(default=3.0, ge=1.0, le=30.0)
@@ -53,12 +56,14 @@ class DebounceConfig(BaseModel):
 
 class EventProcessorConfig(BaseModel):
     """Event processing settings."""
+
     debounce: DebounceConfig = Field(default_factory=DebounceConfig)
     queue_max_size: int = Field(default=1000, ge=100, le=10000)
 
 
 class MemoryConfig(BaseModel):
     """Memory management settings."""
+
     short_term_max_tokens: int = Field(default=25000, ge=1000, le=100000)
     chat_buffer_size: int = Field(default=50, ge=10, le=200)
     max_events_in_context: int = Field(default=30, ge=5, le=100)
@@ -66,6 +71,7 @@ class MemoryConfig(BaseModel):
 
 class ErisBehaviorConfig(BaseModel):
     """Eris personality and behavior settings."""
+
     mask_stability: float = Field(default=0.7, ge=0.0, le=1.0)
     mask_stability_decay: float = Field(default=0.05, ge=0.0, le=0.5)
     min_stability: float = Field(default=0.3, ge=0.0, le=1.0)
@@ -76,12 +82,14 @@ class ErisBehaviorConfig(BaseModel):
 
 class GraphConfig(BaseModel):
     """LangGraph execution settings."""
+
     invoke_timeout: float = Field(default=60.0, ge=10.0, le=300.0)
     max_retries: int = Field(default=2, ge=0, le=5)
 
 
 class LoggingConfig(BaseModel):
     """Logging settings."""
+
     level: str = Field(default="INFO")
     format: str = Field(default="%(asctime)s | %(name)s | %(levelname)s | %(message)s")
     json_mode: bool = Field(default=False)
@@ -101,6 +109,7 @@ class ErisConfig(BaseSettings):
     Loads from config.yaml with environment variable overrides.
     Environment variables use ERIS_ prefix (e.g., ERIS_DATABASE__HOST).
     """
+
     websocket: WebSocketConfig = Field(default_factory=WebSocketConfig)
     database: DatabaseConfig = Field(default_factory=DatabaseConfig)
     ollama: OllamaConfig = Field(default_factory=OllamaConfig)
@@ -116,7 +125,7 @@ class ErisConfig(BaseSettings):
     }
 
     @classmethod
-    def load(cls, config_path: Optional[Path] = None) -> "ErisConfig":
+    def load(cls, config_path: Path | None = None) -> "ErisConfig":
         """Load configuration from YAML file with env overrides.
 
         Args:
@@ -126,6 +135,7 @@ class ErisConfig(BaseSettings):
             Validated ErisConfig instance.
         """
         import os
+
         import yaml
 
         config_data = {}

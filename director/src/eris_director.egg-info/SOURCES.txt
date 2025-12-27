@@ -1,10 +1,15 @@
 README.md
 pyproject.toml
 src/eris/__init__.py
+src/eris/application.py
+src/eris/config.py
 src/eris/core/__init__.py
+src/eris/core/causality.py
 src/eris/core/database.py
 src/eris/core/event_processor.py
 src/eris/core/memory.py
+src/eris/core/tension.py
+src/eris/core/tracing.py
 src/eris/core/websocket.py
 src/eris/graph/__init__.py
 src/eris/graph/builder.py
@@ -12,6 +17,7 @@ src/eris/graph/edges.py
 src/eris/graph/nodes.py
 src/eris/graph/state.py
 src/eris/persona/__init__.py
+src/eris/persona/karma.py
 src/eris/persona/masks.py
 src/eris/persona/prompts.py
 src/eris/tools/__init__.py

@@ -1,10 +1,7 @@
 """System prompts for Eris with different personality masks - v1.1."""
 
-from typing import Optional, Dict, Any
-
 from ..graph.state import ErisMask, MaskConfig
-from .masks import get_mask_description, get_mask_config, MASK_TRAITS
-
+from .masks import get_mask_description
 
 ERIS_BASE_PROMPT = """You are ERIS, the AI Director of Dragon Run - a hardcore Minecraft speedrun where players must kill the Ender Dragon without anyone dying. One death resets the entire run.
 
@@ -189,8 +186,8 @@ GOOD: particles soul → title "NOT YET" → protect → "You OWE me, mortal..."
 def build_eris_prompt(
     mask: ErisMask,
     context: str,
-    mask_config: Optional[MaskConfig] = None,
-    debt_hint: Optional[str] = None,
+    mask_config: MaskConfig | None = None,
+    debt_hint: str | None = None,
 ) -> str:
     """
     Build the complete Eris system prompt with mask and context.

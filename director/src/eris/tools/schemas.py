@@ -1,6 +1,7 @@
 """Pydantic schemas for Minecraft action tools."""
 
-from typing import ClassVar, Literal, Set
+from typing import ClassVar, Literal
+
 from pydantic import BaseModel, Field
 
 
@@ -8,9 +9,21 @@ class SpawnMobArgs(BaseModel):
     """Arguments for spawning mobs."""
 
     mob_type: Literal[
-        "zombie", "skeleton", "spider", "creeper", "enderman",
-        "cave_spider", "silverfish", "witch", "phantom", "husk",
-        "stray", "drowned", "zombie_villager", "pillager", "vindicator"
+        "zombie",
+        "skeleton",
+        "spider",
+        "creeper",
+        "enderman",
+        "cave_spider",
+        "silverfish",
+        "witch",
+        "phantom",
+        "husk",
+        "stray",
+        "drowned",
+        "zombie_villager",
+        "pillager",
+        "vindicator",
     ] = Field(
         ...,
         description=(
@@ -18,7 +31,7 @@ class SpawnMobArgs(BaseModel):
             "Annoying: cave_spider, silverfish, phantom. "
             "Dangerous: witch (potions), vindicator (axe), pillager (crossbow). "
             "Variants: husk (desert zombie), stray (ice skeleton), drowned (water zombie)"
-        )
+        ),
     )
     near_player: str = Field(..., description="Target player name")
     count: int = Field(default=1, ge=1, le=10, description="Number of mobs (1-10)")
@@ -39,7 +52,7 @@ class GiveItemArgs(BaseModel):
             "Minor useful: ender_pearl (1-2 only), boat, water_bucket, lava_bucket, compass, clock. "
             "Useless/trolling: stick, dead_bush, snowball, egg, feather, string, wheat_seeds. "
             "NEVER give: diamond items, netherite, totem_of_undying, elytra, enchanted gear, ender_eyes"
-        )
+        ),
     )
     count: int = Field(default=1, ge=1, le=64, description="Quantity (1-64)")
 
@@ -72,13 +85,20 @@ class ApplyEffectArgs(BaseModel):
     amplifier: int = Field(default=0, ge=0, le=5, description="Effect amplifier (0-5)")
 
     # Dangerous effects have lower max duration enforced in validation
-    DANGEROUS_EFFECTS: ClassVar[Set[str]] = {"poison", "wither", "hunger", "levitation", "darkness", "blindness"}
+    DANGEROUS_EFFECTS: ClassVar[set[str]] = {
+        "poison",
+        "wither",
+        "hunger",
+        "levitation",
+        "darkness",
+        "blindness",
+    }
     MAX_DANGEROUS_DURATION: ClassVar[int] = 30  # Max 30 seconds for dangerous effects
 
     def model_post_init(self, __context) -> None:
         """Enforce max duration for dangerous effects."""
         if self.effect in self.DANGEROUS_EFFECTS and self.duration > self.MAX_DANGEROUS_DURATION:
-            object.__setattr__(self, 'duration', self.MAX_DANGEROUS_DURATION)
+            object.__setattr__(self, "duration", self.MAX_DANGEROUS_DURATION)
 
 
 class StrikeLightningArgs(BaseModel):
@@ -106,7 +126,9 @@ class TeleportArgs(BaseModel):
     """Arguments for teleporting players."""
 
     player: str = Field(..., description="Target player name")
-    mode: Literal["random", "swap", "isolate"] = Field(default="random", description="Teleport mode")
+    mode: Literal["random", "swap", "isolate"] = Field(
+        default="random", description="Teleport mode"
+    )
     target: str | None = Field(default=None, description="Second player for swap mode")
     radius: int = Field(default=100, ge=10, le=500, description="Radius for random TP")
     distance: int = Field(default=200, ge=50, le=1000, description="Distance for isolate mode")
@@ -125,7 +147,7 @@ class PlaySoundArgs(BaseModel):
             "entity.lightning_bolt.thunder, entity.phantom.ambient, entity.wither.ambient. "
             "Music: music_disc.13, music_disc.11, music_disc.ward. "
             "Events: block.portal.trigger, block.end_portal.spawn, entity.player.levelup, ui.toast.challenge_complete"
-        )
+        ),
     )
     target: str = Field(default="@a", description="Target player or @a for all")
     volume: float = Field(default=1.0, ge=0.0, le=10.0, description="Sound volume")
@@ -170,7 +192,9 @@ class SpawnTNTArgs(BaseModel):
 
     near_player: str = Field(..., description="Target player name")
     count: int = Field(default=1, ge=1, le=5, description="Number of TNT to spawn (1-5)")
-    fuse_ticks: int = Field(default=60, ge=20, le=100, description="Fuse time in ticks (20-100, default 60 = 3s)")
+    fuse_ticks: int = Field(
+        default=60, ge=20, le=100, description="Fuse time in ticks (20-100, default 60 = 3s)"
+    )
 
 
 class SpawnFallingBlockArgs(BaseModel):
@@ -181,11 +205,13 @@ class SpawnFallingBlockArgs(BaseModel):
         description=(
             "Block type to drop. Dangerous: anvil (heavy damage), pointed_dripstone (impale). "
             "Annoying: sand, gravel (buries player). Random: concrete_powder (turns to concrete on impact)"
-        )
+        ),
     )
     near_player: str = Field(..., description="Target player name")
     count: int = Field(default=1, ge=1, le=8, description="Number of blocks (1-8)")
-    height: int = Field(default=15, ge=5, le=30, description="Height above player to spawn (5-30 blocks)")
+    height: int = Field(
+        default=15, ge=5, le=30, description="Height above player to spawn (5-30 blocks)"
+    )
 
 
 class ForceLookAtArgs(BaseModel):
@@ -203,12 +229,36 @@ class SpawnParticlesArgs(BaseModel):
     """Arguments for spawning particle effects."""
 
     particle: Literal[
-        "soul", "soul_fire_flame", "smoke", "large_smoke", "flame", "lava",
-        "dripping_water", "falling_water", "portal", "reverse_portal", "enchant",
-        "crit", "explosion", "firework", "heart", "angry_villager",
-        "happy_villager", "mycelium", "enchanted_hit", "note", "witch",
-        "dragon_breath", "end_rod", "damage_indicator", "sweep_attack",
-        "falling_dust", "sculk_soul", "sculk_charge", "sonic_boom", "shriek"
+        "soul",
+        "soul_fire_flame",
+        "smoke",
+        "large_smoke",
+        "flame",
+        "lava",
+        "dripping_water",
+        "falling_water",
+        "portal",
+        "reverse_portal",
+        "enchant",
+        "crit",
+        "explosion",
+        "firework",
+        "heart",
+        "angry_villager",
+        "happy_villager",
+        "mycelium",
+        "enchanted_hit",
+        "note",
+        "witch",
+        "dragon_breath",
+        "end_rod",
+        "damage_indicator",
+        "sweep_attack",
+        "falling_dust",
+        "sculk_soul",
+        "sculk_charge",
+        "sonic_boom",
+        "shriek",
     ] = Field(..., description="Particle type to spawn")
     near_player: str = Field(..., description="Target player name")
     count: int = Field(default=20, ge=1, le=100, description="Number of particles (1-100)")
@@ -220,8 +270,18 @@ class FakeDeathArgs(BaseModel):
 
     player: str = Field(..., description="Player to fake death for")
     cause: Literal[
-        "fell", "lava", "fire", "suffocated", "drowned", "exploded",
-        "magic", "wither", "anvil", "lightning", "kinetic", "void"
+        "fell",
+        "lava",
+        "fire",
+        "suffocated",
+        "drowned",
+        "exploded",
+        "magic",
+        "wither",
+        "anvil",
+        "lightning",
+        "kinetic",
+        "void",
     ] = Field(default="fell", description="Fake death cause")
 
 
@@ -236,7 +296,7 @@ class ProtectPlayerArgs(BaseModel):
         default=25,
         ge=10,
         le=100,
-        description="Aura cost for the saved player (10-100). Higher for more dangerous situations."
+        description="Aura cost for the saved player (10-100). Higher for more dangerous situations.",
     )
 
 
@@ -245,10 +305,7 @@ class RescueTeleportArgs(BaseModel):
 
     player: str = Field(..., description="Player to rescue (must be endangered by Eris)")
     aura_cost: int = Field(
-        default=20,
-        ge=10,
-        le=50,
-        description="Aura cost for the teleported player (10-50)."
+        default=20, ge=10, le=50, description="Aura cost for the teleported player (10-50)."
     )
 
 
@@ -260,5 +317,5 @@ class RespawnOverrideArgs(BaseModel):
         default=50,
         ge=25,
         le=200,
-        description="Aura cost for the respawned player (25-200). Higher = more dramatic."
+        description="Aura cost for the respawned player (25-200). Higher = more dramatic.",
     )

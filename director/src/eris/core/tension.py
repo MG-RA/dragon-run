@@ -13,8 +13,7 @@ Fear and chaos influence:
 """
 
 import logging
-from datetime import datetime, timedelta
-from typing import Dict, Optional, List
+from datetime import datetime
 
 logger = logging.getLogger("eris.tension")
 
@@ -22,29 +21,26 @@ logger = logging.getLogger("eris.tension")
 # === Fear Triggers ===
 # How much fear changes based on events
 
-FEAR_TRIGGERS: Dict[str, int] = {
+FEAR_TRIGGERS: dict[str, int] = {
     # Eris-caused dangers
     "eris_close_call": 15,
-    "eris_spawned_mob": 5,       # Per mob spawned near player
+    "eris_spawned_mob": 5,  # Per mob spawned near player
     "eris_tnt_near": 20,
     "eris_lightning_near": 10,
     "eris_falling_block": 8,
     "eris_effect_harmful": 5,
     "eris_damage": 12,
-
     # External dangers
     "player_damaged": 3,
     "player_damaged_close_call": 10,
     "teammate_death": 25,
     "boss_encounter": 15,
-
     # Relief (negative = fear reduction)
     "eris_protection_used": -10,
     "eris_heal": -8,
     "eris_gift": -5,
     "dimension_arrived_safely": -3,
     "achievement_positive": -2,
-
     # Time-based
     "long_silence": -5,  # Eris hasn't acted in a while
 }
@@ -52,29 +48,26 @@ FEAR_TRIGGERS: Dict[str, int] = {
 # === Chaos Triggers ===
 # How much global chaos changes based on events
 
-CHAOS_TRIGGERS: Dict[str, int] = {
+CHAOS_TRIGGERS: dict[str, int] = {
     # Major events
     "player_death": 30,
     "dragon_killed": -50,  # Victory reduces chaos
     "run_started": 10,
     "run_ended": -20,
-
     # Eris interventions
-    "eris_intervention": 5,      # Any tool use
-    "eris_mob_spawn": 3,         # Per mob
+    "eris_intervention": 5,  # Any tool use
+    "eris_mob_spawn": 3,  # Per mob
     "eris_tnt": 15,
     "eris_lightning": 8,
     "eris_falling_block": 5,
     "eris_damage": 10,
-    "eris_protection": -5,       # Protection reduces chaos slightly
-
+    "eris_protection": -5,  # Protection reduces chaos slightly
     # Progression
     "dimension_change": 5,
     "boss_killed": 10,
     "structure_discovered": 3,
-
     # Time-based
-    "idle_chaos_decay": -2,      # Per minute of calm
+    "idle_chaos_decay": -2,  # Per minute of calm
 }
 
 
@@ -85,15 +78,15 @@ class TensionManager:
     """
 
     def __init__(self):
-        self.player_fear: Dict[str, int] = {}        # username -> 0-100
-        self.player_chaos: Dict[str, int] = {}       # username -> contribution
-        self.global_chaos: int = 0                    # 0-100
+        self.player_fear: dict[str, int] = {}  # username -> 0-100
+        self.player_chaos: dict[str, int] = {}  # username -> contribution
+        self.global_chaos: int = 0  # 0-100
         self.last_update: datetime = datetime.now()
         self.last_decay: datetime = datetime.now()
 
         # Peak tracking for analytics
         self.peak_chaos: int = 0
-        self.peak_fear: Dict[str, int] = {}
+        self.peak_fear: dict[str, int] = {}
 
         logger.info("TensionManager initialized")
 
@@ -128,7 +121,9 @@ class TensionManager:
             self.peak_fear[player] = new_fear
 
         if delta != 0:
-            logger.debug(f"😨 {player} fear: {current} -> {new_fear} ({'+' if delta > 0 else ''}{delta}) [{reason}]")
+            logger.debug(
+                f"😨 {player} fear: {current} -> {new_fear} ({'+' if delta > 0 else ''}{delta}) [{reason}]"
+            )
 
         self.last_update = datetime.now()
         return new_fear
@@ -159,7 +154,7 @@ class TensionManager:
 
         self.last_decay = datetime.now()
 
-    def get_all_fear(self) -> Dict[str, int]:
+    def get_all_fear(self) -> dict[str, int]:
         """Get fear levels for all players."""
         return self.player_fear.copy()
 
@@ -183,7 +178,9 @@ class TensionManager:
             self.peak_chaos = new_chaos
 
         if delta != 0:
-            logger.info(f"🌀 Global chaos: {current} -> {new_chaos} ({'+' if delta > 0 else ''}{delta}) [{reason}]")
+            logger.info(
+                f"🌀 Global chaos: {current} -> {new_chaos} ({'+' if delta > 0 else ''}{delta}) [{reason}]"
+            )
 
         self.last_update = datetime.now()
         return new_chaos
@@ -192,7 +189,9 @@ class TensionManager:
         """Apply a chaos trigger by name. Returns new chaos level."""
         delta = CHAOS_TRIGGERS.get(trigger, 0) * count
         if delta != 0:
-            return self.apply_chaos_delta(delta, reason=f"{trigger}x{count}" if count > 1 else trigger)
+            return self.apply_chaos_delta(
+                delta, reason=f"{trigger}x{count}" if count > 1 else trigger
+            )
         return self.global_chaos
 
     def add_player_chaos_contribution(self, player: str, amount: int):
@@ -216,7 +215,7 @@ class TensionManager:
 
     # === Combined Updates ===
 
-    def process_event(self, event_type: str, player: Optional[str] = None, data: Optional[Dict] = None):
+    def process_event(self, event_type: str, player: str | None = None, data: dict | None = None):
         """
         Process an event and update tension state accordingly.
         Called by event_processor when events come in.
@@ -229,7 +228,9 @@ class TensionManager:
             "player_damaged": "player_damaged",
             "eris_protection_used": "eris_protection_used",
             "eris_rescue_used": "eris_protection_used",
-            "achievement_unlocked": "achievement_positive" if data.get("category") != "negative" else None,
+            "achievement_unlocked": "achievement_positive"
+            if data.get("category") != "negative"
+            else None,
         }
 
         event_to_chaos_trigger = {
@@ -257,7 +258,9 @@ class TensionManager:
         if chaos_trigger:
             self.apply_chaos_trigger(chaos_trigger)
 
-    def process_eris_action(self, tool_name: str, player: Optional[str] = None, args: Optional[Dict] = None):
+    def process_eris_action(
+        self, tool_name: str, player: str | None = None, args: dict | None = None
+    ):
         """
         Process an Eris action and update tension state.
         Called when Eris uses a tool.
@@ -318,7 +321,7 @@ class TensionManager:
 
     # === Query Methods ===
 
-    def get_state_for_graph(self) -> Dict:
+    def get_state_for_graph(self) -> dict:
         """Get tension state to merge into graph state."""
         return {
             "player_fear": self.player_fear.copy(),
@@ -326,7 +329,7 @@ class TensionManager:
             "global_chaos": self.global_chaos,
         }
 
-    def get_analytics(self) -> Dict:
+    def get_analytics(self) -> dict:
         """Get analytics data for run end."""
         return {
             "peak_chaos": self.peak_chaos,
@@ -335,7 +338,7 @@ class TensionManager:
             "total_player_chaos": self.player_chaos.copy(),
         }
 
-    def should_back_off(self, player: Optional[str] = None) -> bool:
+    def should_back_off(self, player: str | None = None) -> bool:
         """
         Check if Eris should back off due to high tension.
         Used by decision_node for mercy/restraint.
@@ -361,6 +364,7 @@ class TensionManager:
 # === Fracture System (v1.3) ===
 # Fracture = global_chaos + total_karma + max_player_fear
 # Tracks overall system stress leading to phase transitions and apocalypse
+
 
 class FractureTracker:
     """
@@ -411,7 +415,11 @@ class FractureTracker:
         - Lies pile up (karma accumulates)
         """
         global_chaos = self.tension_manager.get_global_chaos()
-        max_fear = max(self.tension_manager.player_fear.values()) if self.tension_manager.player_fear else 0
+        max_fear = (
+            max(self.tension_manager.player_fear.values())
+            if self.tension_manager.player_fear
+            else 0
+        )
 
         # Karma contribution is divided by K to prevent it from dominating
         karma_contribution = int(self.total_karma / self.KARMA_DIVISOR)
@@ -419,7 +427,7 @@ class FractureTracker:
         fracture = global_chaos + max_fear + karma_contribution
         return fracture
 
-    def get_phase(self, fracture: Optional[int] = None) -> str:
+    def get_phase(self, fracture: int | None = None) -> str:
         """
         Get current phase based on fracture level.
 
@@ -438,7 +446,7 @@ class FractureTracker:
             return "rising"
         return "normal"
 
-    def check_phase_transition(self) -> Optional[str]:
+    def check_phase_transition(self) -> str | None:
         """
         Check if phase has changed since last check.
         Returns new phase name if transition occurred, None otherwise.
@@ -450,7 +458,9 @@ class FractureTracker:
             old_phase = self._last_phase
             self._last_phase = current_phase
             self._last_fracture = current_fracture
-            logger.info(f"🔥 PHASE TRANSITION: {old_phase} → {current_phase} (fracture={current_fracture})")
+            logger.info(
+                f"🔥 PHASE TRANSITION: {old_phase} → {current_phase} (fracture={current_fracture})"
+            )
             return current_phase
 
         self._last_fracture = current_fracture
@@ -472,7 +482,7 @@ class FractureTracker:
         self.apocalypse_triggered = True
         logger.warning("🍎 APOCALYPSE TRIGGERED - THE APPLE HAS FALLEN")
 
-    def get_state_for_graph(self) -> Dict:
+    def get_state_for_graph(self) -> dict:
         """Get fracture state to merge into graph state."""
         fracture = self.calculate_fracture()
         return {
@@ -481,7 +491,7 @@ class FractureTracker:
             "apocalypse_triggered": self.apocalypse_triggered,
         }
 
-    def get_analytics(self) -> Dict:
+    def get_analytics(self) -> dict:
         """Get fracture analytics for run end."""
         return {
             "final_fracture": self.calculate_fracture(),
@@ -494,8 +504,8 @@ class FractureTracker:
 # === Global Instances ===
 # Singleton pattern for easy access across the codebase
 
-_tension_manager: Optional[TensionManager] = None
-_fracture_tracker: Optional[FractureTracker] = None
+_tension_manager: TensionManager | None = None
+_fracture_tracker: FractureTracker | None = None
 
 
 def get_tension_manager() -> TensionManager:

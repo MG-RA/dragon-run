@@ -14,6 +14,11 @@ dependencies = [
     "pyyaml>=6.0",
     "pydantic>=2.0",
     "rich>=14.2.0",
+    "executing>=2.2.1",
+    "logfire>=4.16.0",
+    "opentelemetry-instrumentation>=0.60b1",
+    "pydantic-settings>=2.12.0",
+    "wrapt>=1.17.3",
 ]
 
 [project.optional-dependencies]
@@ -51,8 +56,18 @@ select = [
 ]
 ignore = [
     "E501",   # line too long (handled by formatter)
+    "E402",   # module level import not at top (intentional for tracing init)
+    "E741",   # ambiguous variable name (l is fine in list comprehensions)
     "B008",   # do not perform function calls in argument defaults (common in FastAPI/Pydantic)
+    "ARG001", # unused function argument (common in LangGraph node signatures)
     "ARG002", # unused method argument (common in overrides)
+    "RUF012", # mutable class attributes (intentional for constants)
+    "RUF059", # unused unpacked variable (intentional in asyncio.wait)
+    "SIM102", # nested if (clearer than combined sometimes)
+    "SIM103", # return bool directly (explicit is clearer)
+    "SIM105", # contextlib.suppress (try/except is clearer)
+    "PTH123", # Path.open() (open() is fine)
+    "N806",   # uppercase variable in function (intentional for constants)
 ]
 
 [tool.ruff.lint.per-file-ignores]
@@ -62,3 +77,8 @@ ignore = [
 quote-style = "double"
 indent-style = "space"
 line-ending = "auto"
+
+[dependency-groups]
+dev = [
+    "ruff>=0.14.10",
+]

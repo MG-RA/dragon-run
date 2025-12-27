@@ -1,10 +1,10 @@
 """Track entities and effects caused by Eris for protection logic."""
 
 import logging
+from collections import defaultdict
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
-from typing import Dict, Set, Optional, Any
-from collections import defaultdict
+from typing import Any
 
 logger = logging.getLogger(__name__)
 
@@ -12,10 +12,11 @@ logger = logging.getLogger(__name__)
 @dataclass
 class ErisIntervention:
     """Record of an Eris intervention."""
+
     target_player: str
     intervention_type: str  # "mob", "tnt", "effect", "damage", "falling_block", "lightning"
     timestamp: datetime = field(default_factory=datetime.now)
-    metadata: Dict[str, Any] = field(default_factory=dict)
+    metadata: dict[str, Any] = field(default_factory=dict)
 
 
 class ErisCausalityTracker:
@@ -27,24 +28,17 @@ class ErisCausalityTracker:
     def __init__(self, expiry_minutes: int = 5):
         self.expiry = timedelta(minutes=expiry_minutes)
         # player_name -> list of interventions
-        self.interventions: Dict[str, list[ErisIntervention]] = defaultdict(list)
+        self.interventions: dict[str, list[ErisIntervention]] = defaultdict(list)
         # Track protection cooldowns (player -> datetime when cooldown expires)
-        self.protection_cooldowns: Dict[str, datetime] = {}
+        self.protection_cooldowns: dict[str, datetime] = {}
         # Track respawn uses this run
         self.respawns_used: int = 0
         self.max_respawns_per_run: int = 2
 
-    def record_intervention(
-        self,
-        player: str,
-        intervention_type: str,
-        **metadata
-    ) -> None:
+    def record_intervention(self, player: str, intervention_type: str, **metadata) -> None:
         """Record that Eris did something to a player."""
         intervention = ErisIntervention(
-            target_player=player,
-            intervention_type=intervention_type,
-            metadata=metadata
+            target_player=player, intervention_type=intervention_type, metadata=metadata
         )
         self.interventions[player].append(intervention)
         logger.info(f"Recorded Eris intervention: {intervention_type} -> {player}")
@@ -60,7 +54,7 @@ class ErisCausalityTracker:
         self._cleanup()
         return self.interventions.get(player, [])
 
-    def get_intervention_types(self, player: str) -> Set[str]:
+    def get_intervention_types(self, player: str) -> set[str]:
         """Get the types of recent interventions for a player."""
         interventions = self.get_recent_interventions(player)
         return {i.intervention_type for i in interventions}
@@ -81,7 +75,9 @@ class ErisCausalityTracker:
     def use_protection(self, player: str) -> None:
         """Mark that protection was used for a player."""
         self.protection_cooldowns[player] = datetime.now() + timedelta(seconds=30)
-        logger.info(f"Protection used for {player}, cooldown until {self.protection_cooldowns[player]}")
+        logger.info(
+            f"Protection used for {player}, cooldown until {self.protection_cooldowns[player]}"
+        )
 
     def can_respawn(self) -> bool:
         """Check if respawn override is available."""
@@ -110,15 +106,14 @@ class ErisCausalityTracker:
         now = datetime.now()
         for player in list(self.interventions.keys()):
             self.interventions[player] = [
-                i for i in self.interventions[player]
-                if now - i.timestamp < self.expiry
+                i for i in self.interventions[player] if now - i.timestamp < self.expiry
             ]
             if not self.interventions[player]:
                 del self.interventions[player]
 
 
 # Global instance for use across the application
-_tracker: Optional[ErisCausalityTracker] = None
+_tracker: ErisCausalityTracker | None = None
 
 
 def get_causality_tracker() -> ErisCausalityTracker:

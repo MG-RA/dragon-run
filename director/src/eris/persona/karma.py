@@ -10,12 +10,11 @@ it influences mask selection probability and intent weights, creating:
 Renamed from "debt" to "karma" for consistency with mask expansion spec.
 """
 
-from typing import Dict, List, Optional
-from enum import Enum
-import random
 import logging
+import random
+from enum import Enum
 
-from ..graph.state import ErisMask, ErisIntent
+from ..graph.state import ErisIntent, ErisMask
 from .masks import MASK_KARMA_FIELDS, MASK_TRAITS
 
 logger = logging.getLogger("eris.karma")
@@ -24,7 +23,7 @@ logger = logging.getLogger("eris.karma")
 # === Karma Configuration ===
 
 KARMA_THRESHOLD = 50  # When karma becomes influential
-KARMA_MAX = 100       # Maximum karma value
+KARMA_MAX = 100  # Maximum karma value
 KARMA_BOOST_FACTOR = 0.5  # Max 50% boost at threshold
 
 # How much karma increases per action type
@@ -97,12 +96,14 @@ KARMA_RESOLUTION = {
 
 # === Phase System ===
 
+
 class ErisPhase(Enum):
     """Phases of Eris's psychological state based on fracture level."""
-    NORMAL = "normal"       # Fracture 0-49: All masks available
-    RISING = "rising"       # Fracture 50-79: CHAOS_BRINGER boosted
-    CRITICAL = "critical"   # Fracture 80-119: PROPHET dominates
-    LOCKED = "locked"       # Fracture 120-149: OBSERVER fading, CHAOS_BRINGER rising
+
+    NORMAL = "normal"  # Fracture 0-49: All masks available
+    RISING = "rising"  # Fracture 50-79: CHAOS_BRINGER boosted
+    CRITICAL = "critical"  # Fracture 80-119: PROPHET dominates
+    LOCKED = "locked"  # Fracture 120-149: OBSERVER fading, CHAOS_BRINGER rising
     APOCALYPSE = "apocalypse"  # Fracture 150+: Only CHAOS_BRINGER, PROPHET, GAMBLER
 
 
@@ -131,7 +132,7 @@ def get_phase_from_fracture(fracture: int) -> ErisPhase:
     return ErisPhase.NORMAL
 
 
-def get_fracture_mask_modifiers(fracture: int, phase: ErisPhase) -> Dict[str, float]:
+def get_fracture_mask_modifiers(fracture: int, phase: ErisPhase) -> dict[str, float]:
     """
     Get mask probability modifiers based on fracture and phase.
 
@@ -168,12 +169,12 @@ def get_fracture_mask_modifiers(fracture: int, phase: ErisPhase) -> Dict[str, fl
 
 
 def calculate_mask_probabilities(
-    player_karmas: Dict[str, int],
-    base_weights: Optional[Dict[str, float]] = None,
+    player_karmas: dict[str, int],
+    base_weights: dict[str, float] | None = None,
     global_chaos: int = 0,
     fracture: int = 0,
     apocalypse_triggered: bool = False,
-) -> Dict[str, float]:
+) -> dict[str, float]:
     """
     Calculate mask selection probabilities influenced by karma and fracture.
 
@@ -234,7 +235,11 @@ def calculate_mask_probabilities(
     total = sum(adjusted.values())
     if total == 0:
         # Fallback: only allow non-dead masks
-        available = [m for m in ErisMask if m.name not in DEAD_MASKS_POST_APOCALYPSE] if apocalypse_triggered else list(ErisMask)
+        available = (
+            [m for m in ErisMask if m.name not in DEAD_MASKS_POST_APOCALYPSE]
+            if apocalypse_triggered
+            else list(ErisMask)
+        )
         return {mask.name: 1.0 / len(available) if mask in available else 0.0 for mask in ErisMask}
 
     return {k: v / total for k, v in adjusted.items()}
@@ -244,7 +249,7 @@ def get_intent_weights(
     mask: ErisMask,
     player_karma: int,
     global_chaos: int = 0,
-) -> Dict[str, float]:
+) -> dict[str, float]:
     """
     Get intent selection weights for a mask, influenced by karma.
 
@@ -295,7 +300,7 @@ def get_intent_weights(
     return {k: v / total for k, v in base_weights.items()}
 
 
-def select_intent_weighted(weights: Dict[str, float]) -> str:
+def select_intent_weighted(weights: dict[str, float]) -> str:
     """Select an intent based on weighted probabilities."""
     intents = list(weights.keys())
     probs = list(weights.values())
@@ -379,7 +384,7 @@ def check_karma_resolution(
     return 0
 
 
-def get_karma_narrative_hint(mask: ErisMask, karma: int) -> Optional[str]:
+def get_karma_narrative_hint(mask: ErisMask, karma: int) -> str | None:
     """
     Get a narrative hint based on karma level for LLM prompts.
 
@@ -422,7 +427,7 @@ def get_karma_narrative_hint(mask: ErisMask, karma: int) -> Optional[str]:
     return hints.get(karma_field)
 
 
-def calculate_total_karma(player_karmas: Dict[str, int]) -> int:
+def calculate_total_karma(player_karmas: dict[str, int]) -> int:
     """Calculate total karma across all masks for fracture calculation."""
     return sum(player_karmas.values())
 
@@ -448,12 +453,7 @@ def calculate_effective_stability(
     Returns:
         Effective stability (clamped to 0.1 - 1.0)
     """
-    stability = (
-        base_stability
-        + (player_aura / 200)
-        - (global_chaos / 100)
-        - (total_karma / 300)
-    )
+    stability = base_stability + (player_aura / 200) - (global_chaos / 100) - (total_karma / 300)
 
     # Clamp to reasonable bounds
     return max(0.1, min(1.0, stability))
