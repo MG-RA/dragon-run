@@ -2,9 +2,12 @@
 """
 CLI tool for generating and managing synthetic scenarios.
 
+Uses SimWorldService for generation with feedback loops - rejected scenarios
+are automatically regenerated with LLM feedback until they pass validation.
+
 Usage:
-    # Generate scenarios
-    python scripts/generate_scenarios.py generate --count 10 --focus rescue_speed
+    # Generate scenarios with feedback loop (recommended)
+    python scripts/generate_scenarios.py generate --count 10 --focus rescue_speed --save
 
     # Generate full library
     python scripts/generate_scenarios.py library --total 50
@@ -30,11 +33,16 @@ sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 
 from langchain_ollama import ChatOllama
 
+from eris.core.tracing import init_tracing
 from eris.validation import (
     DIFFICULTY_LEVELS,
     FOCUS_CATEGORIES,
-    ScenarioFactory,
     validate_scenario_file,
+)
+from eris.validation.sim_world_service import (
+    ScenarioStatus,
+    SimWorldService,
+    SimWorldServiceConfig,
 )
 
 logging.basicConfig(
@@ -57,94 +65,145 @@ def setup_llm(model: str = "ministral-3:14b") -> ChatOllama:
 
 
 async def cmd_generate(args):
-    """Generate scenarios with filtering."""
+    """Generate scenarios with feedback loop.
+
+    Uses SimWorldService which automatically regenerates rejected scenarios
+    with LLM feedback until they pass validation (up to max_retries attempts).
+    """
+    # Initialize tracing
+    init_tracing()
+
     llm = setup_llm(args.model)
-    factory = ScenarioFactory(
-        llm=llm,
+    config = SimWorldServiceConfig(
+        max_retry_attempts=args.max_retries,
+        min_quality_score=args.min_quality,
         scenarios_dir=args.output_dir,
-        min_quality=args.min_quality,
     )
+    service = SimWorldService(llm=llm, config=config)
 
     logger.info(
-        f"Generating {args.count} scenarios (focus={args.focus}, difficulty={args.difficulty})"
+        f"Generating {args.count} scenarios with feedback loop "
+        f"(focus={args.focus}, difficulty={args.difficulty}, max_retries={args.max_retries})"
     )
 
-    accepted, rejected = await factory.generate_and_filter(
+    # Use orchestrate_batch for multiple scenarios
+    results = await service.orchestrate_batch(
         count=args.count,
         focus=args.focus,
         difficulty=args.difficulty,
+        save=args.save,
+        run=False,  # Don't run scenarios, just generate and save
     )
+
+    # Count results
+    accepted = [r for r in results if r.status in (
+        ScenarioStatus.ACCEPTED, ScenarioStatus.SAVED, ScenarioStatus.COMPLETED
+    )]
+    rejected = [r for r in results if r.status == ScenarioStatus.REJECTED]
+    failed = [r for r in results if r.status == ScenarioStatus.FAILED]
+    total_attempts = sum(r.total_attempts for r in results)
 
     # Display results
     print("\n" + "=" * 80)
-    print("  GENERATION RESULTS")
+    print("  GENERATION RESULTS (with feedback loop)")
     print("=" * 80)
-    print(f"  Generated: {args.count}")
-    print(f"  Accepted:  {len(accepted)}")
-    print(f"  Rejected:  {len(rejected)}")
+    print(f"  Requested:       {args.count}")
+    print(f"  Accepted:        {len(accepted)}")
+    print(f"  Rejected:        {len(rejected)}")
+    print(f"  Failed:          {len(failed)}")
+    print(f"  Total attempts:  {total_attempts}")
+    print(f"  Avg attempts:    {total_attempts / args.count:.1f}")
     print("=" * 80)
 
     if accepted:
         print(f"\n{'ACCEPTED SCENARIOS':^80}\n")
-        for i, idea in enumerate(accepted, 1):
-            print(f"{i}. {idea.name}")
-            print(f"   Difficulty: {idea.difficulty}")
-            print(f"   Focus: {', '.join(idea.focus_areas)}")
-            print(f"   Events: {len(idea.key_events)}")
-            print()
+        for i, result in enumerate(accepted, 1):
+            idea = result.final_idea
+            if idea:
+                print(f"{i}. {idea.name}")
+                print(f"   Difficulty: {idea.difficulty}")
+                print(f"   Focus: {', '.join(idea.focus_areas)}")
+                if result.final_validation:
+                    print(f"   Quality: {result.final_validation.quality_score:.2f}")
+                print(f"   Attempts: {result.total_attempts}")
+                print(f"   Trace ID: {result.root_trace_id}")
+                if result.saved_path:
+                    print(f"   Saved: {result.saved_path.name}")
+                print()
 
-    if rejected and args.verbose:
-        print(f"\n{'REJECTED SCENARIOS':^80}\n")
-        for i, (idea, validation) in enumerate(rejected[:10], 1):  # Show first 10
-            print(f"{i}. {idea.name}")
-            print(f"   Quality: {validation.quality_score:.2f}")
-            if validation.errors:
-                print(f"   Errors: {', '.join(validation.errors[:2])}")
-            if validation.warnings:
-                print(f"   Warnings: {', '.join(validation.warnings[:2])}")
+    if (rejected or failed) and args.verbose:
+        print(f"\n{'REJECTED/FAILED SCENARIOS':^80}\n")
+        for i, result in enumerate(rejected + failed, 1):
+            idea = result.final_idea
+            if idea:
+                print(f"{i}. {idea.name}")
+                print(f"   Quality: {result.final_validation.quality_score:.2f}" if result.final_validation else "   Quality: N/A")
+                print(f"   Attempts: {result.total_attempts}")
+                if result.error:
+                    print(f"   Error: {result.error}")
+                # Show last attempt's feedback
+                if result.attempts and result.attempts[-1].feedback:
+                    print("   Last feedback:")
+                    for line in result.attempts[-1].feedback.split("\n")[:3]:
+                        print(f"     {line}")
             print()
-
-    # Save accepted scenarios
-    if args.save and accepted:
-        print(f"\n{'SAVING SCENARIOS':^80}\n")
-        for idea in accepted:
-            try:
-                path = factory.save_scenario(idea)
-                print(f"✓ Saved: {path.name}")
-            except Exception as e:
-                print(f"✗ Failed to save '{idea.name}': {e}")
 
 
 async def cmd_library(args):
-    """Generate a full scenario library."""
+    """Generate a full scenario library across multiple focus categories."""
+    # Initialize tracing
+    init_tracing()
+
     llm = setup_llm(args.model)
-    factory = ScenarioFactory(
-        llm=llm,
+    config = SimWorldServiceConfig(
+        max_retry_attempts=args.max_retries,
+        min_quality_score=args.min_quality,
         scenarios_dir=args.output_dir,
-        min_quality=args.min_quality,
+    )
+    service = SimWorldService(llm=llm, config=config)
+
+    categories = args.categories.split(",") if args.categories else FOCUS_CATEGORIES
+    scenarios_per_category = max(1, args.total // len(categories))
+
+    logger.info(
+        f"Generating scenario library: {args.total} scenarios across {len(categories)} categories"
     )
 
-    categories = args.categories.split(",") if args.categories else None
+    all_results = {}
+    total_accepted = 0
+    total_attempts = 0
 
-    logger.info(f"Generating scenario library: {args.total} scenarios")
+    for category in categories:
+        logger.info(f"Generating {scenarios_per_category} scenarios for '{category}'")
 
-    results = await factory.generate_library(
-        total_scenarios=args.total,
-        categories=categories,
-    )
+        results = await service.orchestrate_batch(
+            count=scenarios_per_category,
+            focus=category,
+            save=True,
+            run=False,
+        )
+
+        accepted = [r for r in results if r.status in (
+            ScenarioStatus.ACCEPTED, ScenarioStatus.SAVED
+        )]
+        all_results[category] = accepted
+        total_accepted += len(accepted)
+        total_attempts += sum(r.total_attempts for r in results)
 
     # Display results
     print("\n" + "=" * 80)
     print("  SCENARIO LIBRARY GENERATION COMPLETE")
     print("=" * 80)
-    print(f"  Total categories: {len(results)}")
-    print(f"  Total scenarios:  {sum(len(paths) for paths in results.values())}")
+    print(f"  Total categories: {len(all_results)}")
+    print(f"  Total accepted:   {total_accepted}")
+    print(f"  Total attempts:   {total_attempts}")
     print("=" * 80)
 
-    for category, paths in results.items():
-        print(f"\n{category}: {len(paths)} scenarios")
-        for path in paths:
-            print(f"  - {path.name}")
+    for category, results in all_results.items():
+        print(f"\n{category}: {len(results)} scenarios")
+        for result in results:
+            if result.saved_path:
+                print(f"  - {result.saved_path.name}")
 
 
 def cmd_validate(args):
@@ -247,13 +306,17 @@ def cmd_list(args):
 
 
 async def cmd_curate(args):
-    """Interactive curation mode."""
+    """Interactive curation mode with feedback loop generation."""
+    # Initialize tracing
+    init_tracing()
+
     llm = setup_llm(args.model)
-    factory = ScenarioFactory(
-        llm=llm,
+    config = SimWorldServiceConfig(
+        max_retry_attempts=args.max_retries,
+        min_quality_score=0.0,  # Accept all for curation (human reviews)
         scenarios_dir=args.output_dir,
-        min_quality=0.0,  # Accept all for curation
     )
+    service = SimWorldService(llm=llm, config=config)
 
     print("\n" + "=" * 80)
     print("  SCENARIO CURATION MODE")
@@ -261,20 +324,24 @@ async def cmd_curate(args):
     print(f"  Generating {args.count} scenarios for review")
     print("=" * 80)
 
-    # Generate scenarios
-    accepted, rejected = await factory.generate_and_filter(
+    # Generate scenarios using feedback loop
+    results = await service.orchestrate_batch(
         count=args.count,
         focus=args.focus,
+        save=False,  # Don't save yet - human will decide
+        run=False,
     )
 
-    all_scenarios = accepted + [idea for idea, _ in rejected]
-
-    print(f"\nGenerated {len(all_scenarios)} scenarios. Review each:\n")
+    print(f"\nGenerated {len(results)} scenarios. Review each:\n")
 
     approved = []
-    for i, idea in enumerate(all_scenarios, 1):
+    for i, result in enumerate(results, 1):
+        idea = result.final_idea
+        if not idea:
+            continue
+
         print("=" * 80)
-        print(f"Scenario {i}/{len(all_scenarios)}: {idea.name}")
+        print(f"Scenario {i}/{len(results)}: {idea.name}")
         print("=" * 80)
         print(f"Description: {idea.description}")
         print(f"Difficulty:  {idea.difficulty}")
@@ -285,13 +352,16 @@ async def cmd_curate(args):
         for j, event in enumerate(idea.key_events, 1):
             print(f"  {j}. {event}")
 
-        # Validate
-        validation = factory.validate_scenario_idea(idea)
-        print(f"\nQuality Score: {validation.quality_score:.2f}")
-        if validation.warnings:
-            print("Warnings:")
-            for warning in validation.warnings:
-                print(f"  - {warning}")
+        # Show validation info
+        if result.final_validation:
+            print(f"\nQuality Score: {result.final_validation.quality_score:.2f}")
+            if result.final_validation.warnings:
+                print("Warnings:")
+                for warning in result.final_validation.warnings:
+                    print(f"  - {warning}")
+
+        print(f"\nGeneration attempts: {result.total_attempts}")
+        print(f"Trace ID: {result.root_trace_id}")
 
         # User decision
         print("\n" + "-" * 80)
@@ -301,7 +371,7 @@ async def cmd_curate(args):
             print("Quitting curation mode.")
             break
         elif response == "y":
-            approved.append(idea)
+            approved.append(result)
             print("✓ Approved")
         else:
             print("✗ Rejected")
@@ -314,9 +384,10 @@ async def cmd_curate(args):
         print(f"  SAVING {len(approved)} APPROVED SCENARIOS")
         print("=" * 80)
 
-        for idea in approved:
-            path = factory.save_scenario(idea)
-            print(f"✓ Saved: {path.name}")
+        for result in approved:
+            saved_result = await service.save_scenario(result)
+            if saved_result.saved_path:
+                print(f"✓ Saved: {saved_result.saved_path.name}")
 
         print(f"\nCuration complete: {len(approved)} scenarios saved")
 
@@ -361,6 +432,12 @@ def main():
         "--save", action="store_true", help="Save accepted scenarios"
     )
     gen_parser.add_argument(
+        "--max-retries",
+        type=int,
+        default=3,
+        help="Max regeneration attempts per scenario (default: 3)",
+    )
+    gen_parser.add_argument(
         "-v", "--verbose", action="store_true", help="Show rejected scenarios"
     )
 
@@ -387,6 +464,12 @@ def main():
         type=float,
         default=0.6,
         help="Minimum quality score",
+    )
+    lib_parser.add_argument(
+        "--max-retries",
+        type=int,
+        default=3,
+        help="Max regeneration attempts per scenario (default: 3)",
     )
 
     # Validate command
@@ -434,6 +517,12 @@ def main():
         type=Path,
         default=Path("scenarios"),
         help="Output directory",
+    )
+    curate_parser.add_argument(
+        "--max-retries",
+        type=int,
+        default=3,
+        help="Max regeneration attempts per scenario (default: 3)",
     )
 
     args = parser.parse_args()

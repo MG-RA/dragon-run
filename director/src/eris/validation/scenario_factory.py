@@ -10,6 +10,7 @@ Workflow:
 """
 
 import logging
+import random
 from pathlib import Path
 from typing import Any
 
@@ -38,14 +39,33 @@ def idea_to_yaml_dict(idea: ScenarioIdea) -> dict[str, Any]:
 
     Returns:
         Dictionary ready to be serialized as YAML
+
+    NOTE: This function now injects prerequisite capability events
+    to ensure scenarios have proper progression.
     """
     # Convert key events to scenario events
-    # This is a simplified conversion - real events would need more detail
     events = []
+
+    # Track required capabilities to inject prerequisites
+    required_capabilities: set[str] = set()
 
     for event_desc in idea.key_events:
         # Parse event description to determine type
         desc_lower = event_desc.lower()
+
+        # Track what capabilities are implied by this event
+        if "nether" in desc_lower:
+            required_capabilities.add("nether_portal")
+        if "blaze" in desc_lower or "fortress" in desc_lower:
+            required_capabilities.add("fortress")
+            required_capabilities.add("nether_portal")  # Fortress requires nether
+        if "stronghold" in desc_lower:
+            required_capabilities.add("stronghold")
+            required_capabilities.add("eyes_of_ender")  # Need eyes to find it
+        if ("dragon" in desc_lower or "end" in desc_lower) and "enter" not in desc_lower:
+            required_capabilities.add("end_portal")
+            required_capabilities.add("stronghold")
+            required_capabilities.add("eyes_of_ender")
 
         # Attempt to infer event type from description
         if "advancement" in desc_lower or "mines" in desc_lower or "crafts" in desc_lower:
@@ -91,7 +111,12 @@ def idea_to_yaml_dict(idea: ScenarioIdea) -> dict[str, Any]:
                     }
                 )
 
-        if "dragon" in desc_lower and ("kill" in desc_lower or "killed" in desc_lower or "defeat" in desc_lower or "dies" in desc_lower):
+        if "dragon" in desc_lower and (
+            "kill" in desc_lower
+            or "killed" in desc_lower
+            or "defeat" in desc_lower
+            or "dies" in desc_lower
+        ):
             events.append(
                 {
                     "type": "dragon_kill",
@@ -142,6 +167,19 @@ def idea_to_yaml_dict(idea: ScenarioIdea) -> dict[str, Any]:
                 }
             )
 
+    # ==================== INJECT PREREQUISITE EVENTS ====================
+
+    # Get all players for this party to randomize capability assignments
+    party_players = _get_party_players(idea.party)
+
+    # Build prerequisite events in correct order, randomizing who does what
+    prerequisite_events = _build_prerequisite_events(
+        required_capabilities, party_players
+    )
+
+    # Prepend prerequisites to main events
+    events = prerequisite_events + events
+
     # Build metadata
     metadata = {
         "name": idea.name,
@@ -160,6 +198,185 @@ def idea_to_yaml_dict(idea: ScenarioIdea) -> dict[str, Any]:
     }
 
     return scenario_dict
+
+
+def _get_party_players(party: str) -> list[str]:
+    """Get all player names for a party preset."""
+    party_players = {
+        "solo_hardcore": ["Solo"],
+        "duo_rush": ["Player1", "Player2"],
+        "speed_trio": ["Alice", "Bob", "Eve"],
+        "quad_squad": ["Miner", "NetherRunner", "BastionRunner", "EndFighter"],
+        "chaos_five": ["Alpha", "Beta", "Gamma", "Delta", "Epsilon"],
+    }
+    return party_players.get(party, ["Alice"])
+
+
+def _build_prerequisite_events(
+    required_capabilities: set[str], party_players: list[str]
+) -> list[dict]:
+    """Build prerequisite events for required capabilities in correct order.
+
+    This ensures proper Minecraft progression:
+    1. Mine stone → get tools
+    2. Get iron/bucket → build portal
+    3. Place nether portal → enter nether
+    4. Find fortress → farm blazes
+    5. Get blaze rods + pearls → craft eyes
+    6. Find stronghold → activate end portal
+
+    Players are randomized for each capability to create interesting
+    creator vs exploiter dynamics for Eris psychology.
+    """
+    prereqs = []
+
+    def pick_player() -> str:
+        """Pick a random player from the party."""
+        return random.choice(party_players)
+
+    # Always need to mine stone first
+    if required_capabilities:
+        prereqs.append(
+            {
+                "type": "advancement",
+                "player": pick_player(),
+                "advancement": "minecraft:story/mine_stone",
+            }
+        )
+
+    # If nether is needed, add progression to portal
+    if "nether_portal" in required_capabilities:
+        # Need iron for bucket - one player does this
+        iron_player = pick_player()
+        prereqs.append(
+            {
+                "type": "advancement",
+                "player": iron_player,
+                "advancement": "minecraft:story/smelt_iron",
+            }
+        )
+        prereqs.append(
+            {
+                "type": "item_crafted",
+                "player": iron_player,
+                "item": "bucket",
+                "count": 1,
+            }
+        )
+        # Need flint and steel to light the portal
+        flint_crafter = pick_player()
+        prereqs.append(
+            {
+                "type": "item_crafted",
+                "player": flint_crafter,
+                "item": "flint_and_steel",
+                "count": 1,
+            }
+        )
+        # Place the portal - could be same or different player
+        portal_placer = pick_player()
+        prereqs.append(
+            {
+                "type": "portal_placed",
+                "player": portal_placer,
+                "portal_type": "nether",
+            }
+        )
+        # First nether entry - portal placer often goes first
+        prereqs.append(
+            {
+                "type": "dimension",
+                "player": portal_placer,
+                "from_dim": "overworld",
+                "to_dim": "nether",
+            }
+        )
+
+    # If fortress is needed - typically nether runner finds it
+    if "fortress" in required_capabilities:
+        prereqs.append(
+            {
+                "type": "structure",
+                "player": pick_player(),
+                "structure": "fortress",
+            }
+        )
+
+    # If eyes are needed (for stronghold/end)
+    if "eyes_of_ender" in required_capabilities:
+        # Blaze farming - nether runner typically
+        blaze_farmer = pick_player()
+        prereqs.append(
+            {
+                "type": "mob_kill",
+                "player": blaze_farmer,
+                "mob_type": "blaze",
+                "count": 6,
+            }
+        )
+        prereqs.append(
+            {
+                "type": "inventory",
+                "player": blaze_farmer,
+                "action": "add",
+                "item": "blaze_rod",
+                "count": 6,
+            }
+        )
+        # Pearl farming - often a different player (enderman hunter)
+        pearl_farmer = pick_player()
+        prereqs.append(
+            {
+                "type": "inventory",
+                "player": pearl_farmer,
+                "action": "add",
+                "item": "ender_pearl",
+                "count": 12,
+            }
+        )
+        # Craft eyes - whoever has the materials
+        crafter = pick_player()
+        prereqs.append(
+            {
+                "type": "item_crafted",
+                "player": crafter,
+                "item": "eye_of_ender",
+                "count": 12,
+            }
+        )
+
+    # If stronghold is needed - explorer typically
+    if "stronghold" in required_capabilities:
+        prereqs.append(
+            {
+                "type": "structure",
+                "player": pick_player(),
+                "structure": "stronghold",
+            }
+        )
+
+    # If end portal is needed
+    if "end_portal" in required_capabilities:
+        # Someone activates the portal
+        end_activator = pick_player()
+        prereqs.append(
+            {
+                "type": "portal_placed",
+                "player": end_activator,
+                "portal_type": "end",
+            }
+        )
+        # First to enter end
+        prereqs.append(
+            {
+                "type": "dimension",
+                "player": pick_player(),
+                "from_dim": "overworld",
+                "to_dim": "the_end",
+            }
+        )
+
+    return prereqs
 
 
 def _extract_player_name(event_desc: str, party: str) -> str:

@@ -1,8 +1,10 @@
 """Logfire tracing initialization and utilities for Eris AI Director."""
 
+import contextvars
 import logging
 import os
 import uuid
+from contextvars import Token
 
 logger = logging.getLogger(__name__)
 
@@ -60,6 +62,54 @@ def generate_trace_id() -> str:
     return uuid.uuid4().hex[:12]
 
 
+def generate_root_trace_id() -> str:
+    """Generate a unique root trace ID for scenario-level correlation.
+
+    Root trace IDs are longer (24 chars) to distinguish from per-event trace IDs (12 chars).
+    Used to track an entire scenario through generation, validation, and execution.
+
+    Returns:
+        24-character hex string (e.g., "a1b2c3d4e5f6a1b2c3d4e5f6")
+    """
+    return uuid.uuid4().hex[:24]
+
+
+# Context variable for root trace ID propagation
+_root_trace_context: contextvars.ContextVar[str | None] = contextvars.ContextVar(
+    "root_trace_id", default=None
+)
+
+
+def set_root_trace_id(trace_id: str) -> Token:
+    """Set the root trace ID for the current async context.
+
+    Args:
+        trace_id: Root trace ID to set
+
+    Returns:
+        Token that can be used to reset the context
+    """
+    return _root_trace_context.set(trace_id)
+
+
+def get_root_trace_id() -> str | None:
+    """Get the current root trace ID, if set.
+
+    Returns:
+        Root trace ID or None if not in a traced context
+    """
+    return _root_trace_context.get()
+
+
+def reset_root_trace_id(token: Token) -> None:
+    """Reset the root trace ID context using a token.
+
+    Args:
+        token: Token from set_root_trace_id()
+    """
+    _root_trace_context.reset(token)
+
+
 def is_tracing_enabled() -> bool:
     """Check if tracing is currently enabled."""
     return _initialized
@@ -70,6 +120,7 @@ class TracingSpan:
     """Context manager that wraps logfire.span when tracing is enabled.
 
     Falls back to a no-op when tracing is disabled.
+    Automatically injects root_trace_id from context if available.
     """
 
     def __init__(self, name: str, **attributes):
@@ -77,6 +128,11 @@ class TracingSpan:
         self.attributes = attributes
         self._span = None
         self._logfire_span = None
+
+        # Auto-inject root_trace_id from context if not explicitly provided
+        root_id = get_root_trace_id()
+        if root_id and "root_trace_id" not in self.attributes:
+            self.attributes["root_trace_id"] = root_id
 
     def set_attribute(self, key: str, value) -> None:
         """Set an attribute on the span after creation."""

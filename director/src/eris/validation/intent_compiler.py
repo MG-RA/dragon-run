@@ -7,6 +7,7 @@ The player's tarot identity influences HOW the intent manifests:
 - A Tower entering danger → brings chaos, spawns mobs
 """
 
+import logging
 import random
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
@@ -17,15 +18,18 @@ from .scenario_schema import (
     AdvancementEvent,
     ChatEvent,
     DamageEvent,
-    DeathEvent,
     DimensionChangeEvent,
     Event,
     HealthChangeEvent,
     InventoryEvent,
+    ItemCraftedEvent,
     MobKillEvent,
+    PortalPlacedEvent,
     StructureDiscoveryEvent,
 )
 from .tarot import TarotCard, TarotProfile
+
+logger = logging.getLogger(__name__)
 
 if TYPE_CHECKING:
     from .synthetic_world import SyntheticWorld
@@ -114,13 +118,41 @@ class IntentCompiler:
         return events
 
     def _handle_enter_danger(self, ctx: CompilationContext, intent: IntentResult) -> list[Event]:
-        """Enter a dangerous area (dimension change)."""
+        """Enter a dangerous area (dimension change).
+
+        GATED ON WORLD CAPABILITIES:
+        - Cannot enter nether without portal
+        - Cannot enter end without end portal activated
+        """
         events: list[Event] = []
         card = ctx.tarot.dominant_card
+        caps = ctx.world.capabilities
 
         # Determine target dimension
         target_dim = intent.target_location or "nether"
         from_dim = ctx.player.dimension.value
+
+        # ==================== CAPABILITY GATES ====================
+
+        if target_dim == "nether":
+            if not caps.can_enter_nether:
+                # No portal exists - must work toward building one
+                logger.debug(
+                    f"[GATE] {ctx.player.name} cannot enter nether - no portal exists"
+                )
+                # Instead of entering, work toward portal
+                return self._handle_work_toward_portal(ctx)
+
+        elif target_dim in ("end", "the_end"):
+            if not caps.can_enter_end:
+                # End not accessible yet
+                logger.debug(
+                    f"[GATE] {ctx.player.name} cannot enter End - portal not ready"
+                )
+                # Work toward end access
+                return self._handle_work_toward_end(ctx)
+
+        # ==================== PORTAL EXISTS - CAN ENTER ====================
 
         # Add dimension change
         events.append(
@@ -173,6 +205,142 @@ class IntentCompiler:
 
         return events
 
+    def _handle_work_toward_portal(
+        self, ctx: CompilationContext
+    ) -> list[Event]:
+        """Work toward building a nether portal when one doesn't exist."""
+        events: list[Event] = []
+        caps = ctx.world.capabilities
+
+        # Check what's needed for portal: obsidian source + flint_and_steel
+        has_obsidian_source = caps.has_bucket or caps.has_diamond_pickaxe or caps.obsidian >= 10
+
+        if not has_obsidian_source:
+            # Need tools first - gather resources for obsidian
+            if ctx.rng.random() < 0.3:
+                # Find iron for bucket
+                events.append(
+                    InventoryEvent(
+                        player=ctx.player.name,
+                        action="add",
+                        item="iron_ingot",
+                        count=ctx.rng.randint(1, 3),
+                    )
+                )
+            if ctx.rng.random() < 0.2:
+                events.append(
+                    ChatEvent(
+                        player=ctx.player.name,
+                        message="Need to find iron for a bucket...",
+                    )
+                )
+        elif not caps.has_flint_and_steel:
+            # Have obsidian source but need flint and steel to light
+            if ctx.rng.random() < 0.4:
+                events.append(
+                    ItemCraftedEvent(
+                        player=ctx.player.name,
+                        item="flint_and_steel",
+                        count=1,
+                    )
+                )
+            else:
+                events.append(
+                    ChatEvent(
+                        player=ctx.player.name,
+                        message="Need flint and steel to light the portal...",
+                    )
+                )
+        elif caps.can_build_portal:
+            # Have everything - place the portal!
+            events.append(
+                PortalPlacedEvent(
+                    player=ctx.player.name,
+                    portal_type="nether",
+                )
+            )
+            events.append(
+                ChatEvent(
+                    player=ctx.player.name,
+                    message="Portal is lit! Let's go!",
+                )
+            )
+
+        return events
+
+    def _handle_work_toward_end(
+        self, ctx: CompilationContext
+    ) -> list[Event]:
+        """Work toward activating end portal when it's not ready."""
+        events: list[Event] = []
+        caps = ctx.world.capabilities
+
+        # Check what's needed
+        if caps.eyes_of_ender < 12:
+            if caps.can_craft_eyes:
+                # Craft eyes
+                can_craft = min(caps.blaze_rods, caps.ender_pearls, 12 - caps.eyes_of_ender)
+                if can_craft > 0:
+                    events.append(
+                        ItemCraftedEvent(
+                            player=ctx.player.name,
+                            item="eye_of_ender",
+                            count=can_craft,
+                        )
+                    )
+            elif not caps.can_farm_blazes:
+                # Need to find fortress or enter nether
+                events.append(
+                    ChatEvent(
+                        player=ctx.player.name,
+                        message="Need blaze rods... where's the fortress?",
+                    )
+                )
+            elif caps.blaze_rods == 0:
+                # Farm blazes
+                events.append(
+                    MobKillEvent(
+                        player=ctx.player.name,
+                        mob_type="blaze",
+                        count=1,
+                    )
+                )
+                events.append(
+                    InventoryEvent(
+                        player=ctx.player.name,
+                        action="add",
+                        item="blaze_rod",
+                        count=1,
+                    )
+                )
+
+        elif not caps.stronghold_found:
+            # Use eyes to find stronghold
+            events.append(
+                ChatEvent(
+                    player=ctx.player.name,
+                    message="Following the eye...",
+                )
+            )
+            if ctx.rng.random() < 0.3:
+                events.append(
+                    StructureDiscoveryEvent(
+                        player=ctx.player.name,
+                        structure="stronghold",
+                    )
+                )
+
+        elif caps.stronghold_found and caps.eyes_of_ender >= 12:
+            # Activate end portal
+            events.append(
+                PortalPlacedEvent(
+                    player=ctx.player.name,
+                    portal_type="end",
+                )
+            )
+
+        return events
+
     def _handle_chase_rare(self, ctx: CompilationContext, intent: IntentResult) -> list[Event]:
         """Chase rare items or mobs."""
         events: list[Event] = []
@@ -212,9 +380,62 @@ class IntentCompiler:
         return events
 
     def _handle_rush_structure(self, ctx: CompilationContext, intent: IntentResult) -> list[Event]:
-        """Rush to find a structure."""
+        """Rush to find a structure.
+
+        GATED ON WORLD CAPABILITIES:
+        - Fortress requires nether access
+        - Stronghold requires eyes of ender
+        - Bastion requires nether access
+        """
         events: list[Event] = []
         target = intent.target_location or "fortress"
+        caps = ctx.world.capabilities
+
+        # ==================== CAPABILITY GATES ====================
+
+        if target == "fortress":
+            if not caps.can_enter_nether:
+                # Cannot find fortress without nether access
+                logger.debug(
+                    f"[GATE] {ctx.player.name} cannot rush fortress - not in nether"
+                )
+                return self._handle_work_toward_portal(ctx)
+            if ctx.player.dimension != Dimension.NETHER:
+                # Not in nether yet - need to enter first
+                return self._handle_enter_danger(
+                    ctx,
+                    IntentResult(
+                        intent=Intent.ENTER_DANGER,
+                        target_location="nether",
+                        confidence=1.0,
+                    ),
+                )
+
+        elif target == "stronghold":
+            if not caps.can_locate_stronghold:
+                # Need eyes to find stronghold
+                logger.debug(
+                    f"[GATE] {ctx.player.name} cannot rush stronghold - no eyes"
+                )
+                return self._handle_work_toward_end(ctx)
+
+        elif target == "bastion":
+            if not caps.can_enter_nether:
+                logger.debug(
+                    f"[GATE] {ctx.player.name} cannot rush bastion - not in nether"
+                )
+                return self._handle_work_toward_portal(ctx)
+            if ctx.player.dimension != Dimension.NETHER:
+                return self._handle_enter_danger(
+                    ctx,
+                    IntentResult(
+                        intent=Intent.ENTER_DANGER,
+                        target_location="nether",
+                        confidence=1.0,
+                    ),
+                )
+
+        # ==================== CAN DISCOVER STRUCTURE ====================
 
         # Discovery event
         events.append(
@@ -482,28 +703,55 @@ class IntentCompiler:
     # ==================== PROGRESSION INTENTS (Death) ====================
 
     def _handle_rush_endgame(self, ctx: CompilationContext, intent: IntentResult) -> list[Event]:
-        """Rush toward dragon kill."""
+        """Rush toward dragon kill.
+
+        GATED ON WORLD CAPABILITIES:
+        - Cannot fight dragon without End access
+        - Cannot enter End without portal activated
+        """
         events: list[Event] = []
+        caps = ctx.world.capabilities
 
-        if ctx.player.dimension == Dimension.THE_END:
-            # Fighting the dragon
-            if ctx.rng.random() < 0.4:
-                events.append(
-                    DamageEvent(
-                        player=ctx.player.name,
-                        source="dragon",
-                        amount=ctx.rng.randint(4, 10),
-                    )
-                )
+        # ==================== CAPABILITY GATES ====================
 
-            # Progress toward killing dragon (represented as mob kill)
+        if not caps.can_enter_end:
+            # Cannot reach dragon yet - work toward it
+            logger.debug(
+                f"[GATE] {ctx.player.name} cannot rush endgame - End not accessible"
+            )
+            return self._handle_work_toward_end(ctx)
+
+        if ctx.player.dimension != Dimension.THE_END:
+            # Have access but not in End yet - enter
+            return self._handle_enter_danger(
+                ctx,
+                IntentResult(
+                    intent=Intent.ENTER_DANGER,
+                    target_location="end",
+                    confidence=1.0,
+                ),
+            )
+
+        # ==================== IN THE END - CAN FIGHT ====================
+
+        # Fighting the dragon
+        if ctx.rng.random() < 0.4:
             events.append(
-                MobKillEvent(
+                DamageEvent(
                     player=ctx.player.name,
-                    mob_type="enderman",
-                    count=ctx.rng.randint(1, 3),
+                    source="dragon",
+                    amount=ctx.rng.randint(4, 10),
                 )
             )
+
+        # Progress toward killing dragon (represented as mob kill)
+        events.append(
+            MobKillEvent(
+                player=ctx.player.name,
+                mob_type="enderman",
+                count=ctx.rng.randint(1, 3),
+            )
+        )
 
         return events
 

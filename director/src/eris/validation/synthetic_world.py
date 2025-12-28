@@ -5,6 +5,7 @@ Simulates Minecraft state evolution based on scenario events and Eris tool calls
 Mirrors GameSnapshot and PlayerStateSnapshot from the Java plugin.
 """
 
+import logging
 import time
 from dataclasses import dataclass, field
 from enum import Enum
@@ -22,14 +23,366 @@ from .scenario_schema import (
     Event,
     HealthChangeEvent,
     InventoryEvent,
+    ItemCraftedEvent,
     MobKillEvent,
     PartyPreset,
     PlayerDefinition,
+    PortalPlacedEvent,
     Scenario,
     StructureDiscoveryEvent,
 )
 from .tarot import TarotCard, TarotProfile, get_drift_for_event
 from .world_diff import RunTrace, WorldDiff
+
+logger = logging.getLogger(__name__)
+
+
+# ==================== WORLD ARCANA ====================
+
+
+class WorldArcana(str, Enum):
+    """
+    The nine-stage initiation rite of a Minecraft run.
+
+    Each stage is a Tarot threshold that changes what is possible.
+    Eris treats these as cosmic law, not game mechanics.
+
+    The progression is irreversible - once a threshold is crossed,
+    the world is permanently changed. Who crossed it matters.
+    """
+
+    # Stage 0: The world is innocent. Nothing irreversible has happened.
+    THE_FOOL = "the_fool"
+
+    # Stage 1: Someone changed reality. There is now an inside and an outside.
+    THE_GATE = "the_gate"  # Nether portal placed (Fool → Magician)
+
+    # Stage 2: Order is broken. Hell is mapped.
+    THE_TOWER = "the_tower"  # Fortress found
+
+    # Stage 3: Power from suffering enters the economy.
+    THE_DEVIL = "the_devil"  # Blaze rods exist
+
+    # Stage 4: Teleportation, deception, escape, dream-logic.
+    THE_MOON = "the_moon"  # Ender pearls exist
+
+    # Stage 5: The world can now know where it must go.
+    THE_SEER = "the_seer"  # Eyes of Ender crafted
+
+    # Stage 6: A hidden sacred place revealed.
+    THE_HERMIT = "the_hermit"  # Stronghold found
+
+    # Stage 7: No more grinding. The final reckoning is armed.
+    JUDGMENT = "judgment"  # End portal activated
+
+    # Stage 8: The false god rules. Reality is unfinished.
+    THE_WORLD_INVERTED = "the_world_inverted"  # Dragon alive, in the End
+
+    # Stage 9: The rite completes. The cosmos stabilizes.
+    THE_WORLD = "the_world"  # Dragon dead
+
+
+# Arcana progression order (each stage requires all previous)
+ARCANA_ORDER = [
+    WorldArcana.THE_FOOL,
+    WorldArcana.THE_GATE,
+    WorldArcana.THE_TOWER,
+    WorldArcana.THE_DEVIL,
+    WorldArcana.THE_MOON,
+    WorldArcana.THE_SEER,
+    WorldArcana.THE_HERMIT,
+    WorldArcana.JUDGMENT,
+    WorldArcana.THE_WORLD_INVERTED,
+    WorldArcana.THE_WORLD,
+]
+
+
+# ==================== WORLD CAPABILITIES ====================
+
+
+@dataclass
+class ArcanaTransition:
+    """Records who crossed an arcana threshold and when."""
+
+    arcana: WorldArcana
+    player: str
+    timestamp: float
+
+
+@dataclass
+class CapabilityContribution:
+    """Records who unlocked a capability and when."""
+
+    capability: str
+    player: str
+    timestamp: float
+
+
+@dataclass
+class WorldCapabilities:
+    """
+    Shared team capabilities - what the party can now do.
+
+    This tracks WORLD state, not individual player state.
+    Alice builds portal → Bob can use it.
+    Charlie finds fortress → everyone can farm blazes.
+
+    Used for:
+    - Gating intents (can't ENTER_DANGER if no portal)
+    - Validating scenario events
+    - Psychology (who created vs who exploited)
+    """
+
+    # Portal/dimension access
+    nether_portal_placed: bool = False
+    end_portal_activated: bool = False
+
+    # Structure progress
+    fortress_found: bool = False
+    stronghold_found: bool = False
+    bastion_found: bool = False
+
+    # Resource counts (team-wide totals)
+    blaze_rods: int = 0
+    ender_pearls: int = 0
+    eyes_of_ender: int = 0
+    obsidian: int = 0  # Need 10 for portal frame
+
+    # Portal materials
+    has_flint_and_steel: bool = False  # Required to light portal
+
+    # Combat readiness
+    has_beds: bool = False
+    has_bows: bool = False
+    has_iron_armor: bool = False
+    has_diamond_gear: bool = False
+
+    # Tool progression
+    has_iron_pickaxe: bool = False
+    has_diamond_pickaxe: bool = False
+    has_bucket: bool = False
+
+    # Contribution tracking - WHO unlocked each capability
+    contributions: list[CapabilityContribution] = field(default_factory=list)
+
+    # Arcana tracking - WHO crossed each threshold
+    arcana_transitions: list[ArcanaTransition] = field(default_factory=list)
+
+    # Dragon state (needed for World arcana)
+    dragon_dead: bool = False
+    anyone_in_end: bool = False
+
+    # ==================== WORLD ARCANA ====================
+
+    @property
+    def current_arcana(self) -> WorldArcana:
+        """
+        Determine the current World Arcana based on capabilities.
+
+        This is the highest threshold that has been crossed.
+        The world cannot skip stages - each requires the previous.
+        """
+        # Stage 9: Dragon dead - The World (upright)
+        if self.dragon_dead:
+            return WorldArcana.THE_WORLD
+
+        # Stage 8: In the End with dragon alive - The World (inverted)
+        if self.anyone_in_end and self.end_portal_activated:
+            return WorldArcana.THE_WORLD_INVERTED
+
+        # Stage 7: End portal activated - Judgment
+        if self.end_portal_activated:
+            return WorldArcana.JUDGMENT
+
+        # Stage 6: Stronghold found - The Hermit
+        if self.stronghold_found:
+            return WorldArcana.THE_HERMIT
+
+        # Stage 5: Eyes of Ender exist - The Seer
+        if self.eyes_of_ender > 0:
+            return WorldArcana.THE_SEER
+
+        # Stage 4: Ender pearls exist - The Moon
+        if self.ender_pearls > 0:
+            return WorldArcana.THE_MOON
+
+        # Stage 3: Blaze rods exist - The Devil
+        if self.blaze_rods > 0:
+            return WorldArcana.THE_DEVIL
+
+        # Stage 2: Fortress found - The Tower
+        if self.fortress_found:
+            return WorldArcana.THE_TOWER
+
+        # Stage 1: Nether portal placed - The Gate
+        if self.nether_portal_placed:
+            return WorldArcana.THE_GATE
+
+        # Stage 0: Nothing has happened - The Fool
+        return WorldArcana.THE_FOOL
+
+    @property
+    def arcana_stage(self) -> int:
+        """Get the numeric stage (0-9) of the current arcana."""
+        return ARCANA_ORDER.index(self.current_arcana)
+
+    def cross_threshold(self, arcana: WorldArcana, player: str) -> bool:
+        """
+        Record that a player crossed an arcana threshold.
+
+        Returns True if this was a new threshold, False if already crossed.
+        """
+        # Check if already crossed
+        if any(t.arcana == arcana for t in self.arcana_transitions):
+            return False
+
+        self.arcana_transitions.append(
+            ArcanaTransition(
+                arcana=arcana,
+                player=player,
+                timestamp=time.time(),
+            )
+        )
+        logger.info(f"[ARCANA] {player} crossed threshold: {arcana.value}")
+        return True
+
+    def get_threshold_crosser(self, arcana: WorldArcana) -> str | None:
+        """Get who crossed a specific arcana threshold."""
+        for t in self.arcana_transitions:
+            if t.arcana == arcana:
+                return t.player
+        return None
+
+    def get_arcana_history(self) -> list[tuple[WorldArcana, str]]:
+        """Get the sequence of arcana transitions and who triggered them."""
+        return [(t.arcana, t.player) for t in self.arcana_transitions]
+
+    # ==================== DERIVED CAPABILITIES ====================
+
+    @property
+    def can_mine_obsidian(self) -> bool:
+        """Need diamond pickaxe to mine obsidian for portal."""
+        return self.has_diamond_pickaxe
+
+    @property
+    def can_build_portal(self) -> bool:
+        """Need obsidian source (bucket for lava cast OR diamond pick to mine) AND flint_and_steel to light."""
+        has_obsidian_source = self.has_bucket or self.has_diamond_pickaxe or self.obsidian >= 10
+        return has_obsidian_source and self.has_flint_and_steel
+
+    @property
+    def can_enter_nether(self) -> bool:
+        """Portal must exist for anyone to enter."""
+        return self.nether_portal_placed
+
+    @property
+    def can_farm_blazes(self) -> bool:
+        """Need nether access AND fortress found."""
+        return self.can_enter_nether and self.fortress_found
+
+    @property
+    def can_obtain_blaze_rods(self) -> bool:
+        """Same as can_farm_blazes."""
+        return self.can_farm_blazes
+
+    @property
+    def can_craft_eyes(self) -> bool:
+        """Need blaze powder (from rods) AND ender pearls."""
+        return self.blaze_rods > 0 and self.ender_pearls > 0
+
+    @property
+    def can_locate_stronghold(self) -> bool:
+        """Need at least one eye of ender."""
+        return self.eyes_of_ender > 0
+
+    @property
+    def can_enter_end(self) -> bool:
+        """Need stronghold found AND portal activated."""
+        return self.stronghold_found and self.end_portal_activated
+
+    @property
+    def can_fight_dragon(self) -> bool:
+        """Need end access AND combat capability (beds or bows)."""
+        return self.can_enter_end and (self.has_beds or self.has_bows)
+
+    @property
+    def dragon_killable(self) -> bool:
+        """More lenient - just need to be in the End."""
+        return self.can_enter_end
+
+    # ==================== CAPABILITY TRACKING ====================
+
+    def unlock(self, capability: str, player: str) -> None:
+        """Record that a player unlocked this capability."""
+        self.contributions.append(
+            CapabilityContribution(
+                capability=capability,
+                player=player,
+                timestamp=time.time(),
+            )
+        )
+        logger.debug(f"[CAP] {player} unlocked: {capability}")
+
+    def get_contributor(self, capability: str) -> str | None:
+        """Get the player who first unlocked a capability."""
+        for contrib in self.contributions:
+            if contrib.capability == capability:
+                return contrib.player
+        return None
+
+    def get_all_contributions_by_player(self, player: str) -> list[str]:
+        """Get all capabilities unlocked by a player."""
+        return [c.capability for c in self.contributions if c.player == player]
+
+    def get_exploiters(self, capability: str, users: list[str]) -> list[str]:
+        """Get players who used a capability they didn't unlock."""
+        creator = self.get_contributor(capability)
+        if not creator:
+            return []
+        return [p for p in users if p != creator]
+
+    # ==================== STATE SUMMARY ====================
+
+    def to_dict(self) -> dict[str, Any]:
+        """Serialize to dict for logging/snapshots."""
+        return {
+            "nether_portal_placed": self.nether_portal_placed,
+            "end_portal_activated": self.end_portal_activated,
+            "fortress_found": self.fortress_found,
+            "stronghold_found": self.stronghold_found,
+            "bastion_found": self.bastion_found,
+            "blaze_rods": self.blaze_rods,
+            "ender_pearls": self.ender_pearls,
+            "eyes_of_ender": self.eyes_of_ender,
+            "obsidian": self.obsidian,
+            "has_flint_and_steel": self.has_flint_and_steel,
+            "has_beds": self.has_beds,
+            "has_bows": self.has_bows,
+            "has_iron_armor": self.has_iron_armor,
+            "has_diamond_gear": self.has_diamond_gear,
+            "has_iron_pickaxe": self.has_iron_pickaxe,
+            "has_diamond_pickaxe": self.has_diamond_pickaxe,
+            "has_bucket": self.has_bucket,
+            # Derived
+            "can_build_portal": self.can_build_portal,
+            "can_enter_nether": self.can_enter_nether,
+            "can_farm_blazes": self.can_farm_blazes,
+            "can_craft_eyes": self.can_craft_eyes,
+            "can_enter_end": self.can_enter_end,
+            "can_fight_dragon": self.can_fight_dragon,
+            # Contributors
+            "contributors": [
+                {"capability": c.capability, "player": c.player}
+                for c in self.contributions
+            ],
+            # World Arcana - the initiation rite
+            "current_arcana": self.current_arcana.value,
+            "arcana_stage": self.arcana_stage,
+            "arcana_history": [
+                {"arcana": t.arcana.value, "player": t.player}
+                for t in self.arcana_transitions
+            ],
+        }
 
 
 class GameState(str, Enum):
@@ -93,6 +446,11 @@ class SyntheticWorld:
     world_seed: int = 0
     weather: str = "clear"
     time_of_day: int = 6000  # Noon
+
+    # ==================== WORLD CAPABILITIES ====================
+
+    # Shared team capabilities - gates progression
+    capabilities: WorldCapabilities = field(default_factory=WorldCapabilities)
 
     # ==================== TRACKING ====================
 
@@ -259,6 +617,8 @@ class SyntheticWorld:
             "mob_kill": self._handle_mob_kill,
             "structure": self._handle_structure,
             "health": self._handle_health,
+            "portal_placed": self._handle_portal_event,
+            "item_crafted": self._handle_item_crafted,
         }
         return handlers.get(event_type)
 
@@ -314,6 +674,12 @@ class SyntheticWorld:
             event.player, f"inventory.{event.item}", old_count, new_count
         )
 
+        # Update world capabilities based on item change
+        if event.action == "add":
+            self._update_capabilities_from_item(event.player, event.item, event.count)
+        elif event.action == "remove":
+            self._decrement_capabilities_from_item(event.item, event.count)
+
     def _handle_dimension(self, event: DimensionChangeEvent, diff: WorldDiff) -> None:
         """Player changes dimension."""
         player = self.players.get(event.player)
@@ -337,6 +703,11 @@ class SyntheticWorld:
             diff.add_player_change(event.player, "entered_nether", False, True)
         if player.dimension == Dimension.THE_END and not player.entered_end:
             diff.add_player_change(event.player, "entered_end", False, True)
+            # ARCANA: The World (Inverted) - the false god rules, reality is unfinished
+            caps = self.capabilities
+            if not caps.anyone_in_end:
+                caps.anyone_in_end = True
+                caps.cross_threshold(WorldArcana.THE_WORLD_INVERTED, event.player)
 
     def _handle_chat(self, event: ChatEvent, diff: WorldDiff) -> None:
         """Player sends chat message. No state change, just logging."""
@@ -369,6 +740,11 @@ class SyntheticWorld:
         diff.add_change("dragon_health", 200.0, 0)
         diff.caused_victory = True
 
+        # ARCANA: The World (Upright) - the rite completes, the cosmos stabilizes
+        caps = self.capabilities
+        caps.dragon_dead = True
+        caps.cross_threshold(WorldArcana.THE_WORLD, event.player)
+
         self.game_state = GameState.ENDING
 
     def _handle_mob_kill(self, event: MobKillEvent, diff: WorldDiff) -> None:
@@ -400,6 +776,9 @@ class SyntheticWorld:
                 event.player, f"discovered.{event.structure}", False, True
             )
 
+            # Update world capabilities
+            self._update_capabilities_from_structure(event.player, event.structure)
+
     def _handle_health(self, event: HealthChangeEvent, diff: WorldDiff) -> None:
         """Player health changes (healing, regen)."""
         player = self.players.get(event.player)
@@ -422,6 +801,206 @@ class SyntheticWorld:
             new_fear = max(0, old_fear - event.amount)
             self.player_fear[event.player] = new_fear
             diff.add_player_change(event.player, "fear", old_fear, new_fear)
+
+    def _handle_portal_event(self, event: PortalPlacedEvent, diff: WorldDiff) -> None:
+        """Player places/activates a portal - unlocks dimension access."""
+        player = self.players.get(event.player)
+        if not player:
+            return
+
+        portal_type = event.portal_type
+        caps = self.capabilities
+
+        if portal_type == "nether":
+            if not caps.nether_portal_placed:
+                caps.nether_portal_placed = True
+                caps.unlock("nether_portal", event.player)
+                diff.add_change("capabilities.nether_portal_placed", False, True)
+                # ARCANA: The Gate - reality has an inside and outside now
+                caps.cross_threshold(WorldArcana.THE_GATE, event.player)
+                logger.info(f"[WORLD] {event.player} placed nether portal - THE GATE opens")
+
+        elif portal_type == "end":
+            if not caps.end_portal_activated:
+                caps.end_portal_activated = True
+                caps.unlock("end_portal", event.player)
+                diff.add_change("capabilities.end_portal_activated", False, True)
+                # ARCANA: Judgment - the final reckoning is armed
+                caps.cross_threshold(WorldArcana.JUDGMENT, event.player)
+                logger.info(f"[WORLD] {event.player} activated end portal - JUDGMENT is armed")
+
+    def _handle_item_crafted(self, event: ItemCraftedEvent, diff: WorldDiff) -> None:
+        """Player crafts an item - may unlock world capabilities."""
+        player = self.players.get(event.player)
+        if not player or not player.alive:
+            return
+
+        # Add to inventory
+        old_count = player.inventory.get(event.item, 0)
+        player.add_item(event.item, event.count)
+        diff.add_player_change(
+            event.player, f"inventory.{event.item}", old_count, player.inventory.get(event.item, 0)
+        )
+
+        # Update world capabilities
+        self._update_capabilities_from_item(event.player, event.item, event.count)
+
+    # ==================== CAPABILITY UPDATES ====================
+
+    def _update_capabilities_from_item(
+        self, player: str, item: str, count: int
+    ) -> None:
+        """Update world capabilities when a player acquires an item."""
+        caps = self.capabilities
+
+        # Critical progression items
+        item_lower = item.lower()
+
+        # Blaze rods - key progression
+        if "blaze_rod" in item_lower or item_lower == "blaze_rod":
+            old_count = caps.blaze_rods
+            caps.blaze_rods += count
+            if old_count == 0:
+                caps.unlock("blaze_rods", player)
+                # ARCANA: The Devil - power from suffering enters the economy
+                caps.cross_threshold(WorldArcana.THE_DEVIL, player)
+
+        # Ender pearls
+        elif "ender_pearl" in item_lower or item_lower == "ender_pearl":
+            old_count = caps.ender_pearls
+            caps.ender_pearls += count
+            if old_count == 0:
+                caps.unlock("ender_pearls", player)
+                # ARCANA: The Moon - teleportation, deception, dream-logic
+                caps.cross_threshold(WorldArcana.THE_MOON, player)
+
+        # Eyes of ender
+        elif "eye_of_ender" in item_lower or "ender_eye" in item_lower:
+            old_count = caps.eyes_of_ender
+            caps.eyes_of_ender += count
+            if old_count == 0:
+                caps.unlock("eyes_of_ender", player)
+                # ARCANA: The Seer - the world can now know where it must go
+                caps.cross_threshold(WorldArcana.THE_SEER, player)
+
+        # Tools
+        elif item_lower in ("iron_pickaxe", "iron_pick"):
+            if not caps.has_iron_pickaxe:
+                caps.has_iron_pickaxe = True
+                caps.unlock("iron_pickaxe", player)
+
+        elif item_lower in ("diamond_pickaxe", "diamond_pick"):
+            if not caps.has_diamond_pickaxe:
+                caps.has_diamond_pickaxe = True
+                caps.unlock("diamond_pickaxe", player)
+
+        elif item_lower == "bucket" or item_lower == "lava_bucket":
+            if not caps.has_bucket:
+                caps.has_bucket = True
+                caps.unlock("bucket", player)
+
+        # Portal materials
+        elif item_lower == "flint_and_steel":
+            if not caps.has_flint_and_steel:
+                caps.has_flint_and_steel = True
+                caps.unlock("flint_and_steel", player)
+
+        elif item_lower == "obsidian":
+            old_count = caps.obsidian
+            caps.obsidian += count
+            if old_count < 10 and caps.obsidian >= 10:
+                caps.unlock("obsidian_stack", player)
+
+        # Combat items
+        elif item_lower == "bow":
+            if not caps.has_bows:
+                caps.has_bows = True
+                caps.unlock("bows", player)
+
+        elif item_lower in ("bed", "white_bed", "red_bed"):
+            if not caps.has_beds:
+                caps.has_beds = True
+                caps.unlock("beds", player)
+
+        # Armor progression
+        elif "iron" in item_lower and any(
+            p in item_lower for p in ["chestplate", "helmet", "leggings", "boots"]
+        ):
+            if not caps.has_iron_armor:
+                caps.has_iron_armor = True
+                caps.unlock("iron_armor", player)
+
+        elif "diamond" in item_lower and any(
+            p in item_lower
+            for p in ["chestplate", "helmet", "leggings", "boots", "sword"]
+        ):
+            if not caps.has_diamond_gear:
+                caps.has_diamond_gear = True
+                caps.unlock("diamond_gear", player)
+
+    def _decrement_capabilities_from_item(self, item: str, count: int) -> None:
+        """Decrement consumable resource counts when items are removed.
+
+        This handles consumption:
+        - Crafting eyes of ender consumes blaze rods and ender pearls
+        - Placing portal consumes obsidian blocks
+        - Eyes thrown to locate stronghold are consumed
+        """
+        caps = self.capabilities
+        item_lower = item.lower()
+
+        # Consumable resources
+        if "blaze_rod" in item_lower or item_lower == "blaze_rod":
+            caps.blaze_rods = max(0, caps.blaze_rods - count)
+
+        elif "ender_pearl" in item_lower or item_lower == "ender_pearl":
+            caps.ender_pearls = max(0, caps.ender_pearls - count)
+
+        elif "eye_of_ender" in item_lower or "ender_eye" in item_lower:
+            caps.eyes_of_ender = max(0, caps.eyes_of_ender - count)
+
+        elif item_lower == "obsidian":
+            caps.obsidian = max(0, caps.obsidian - count)
+
+    def _update_capabilities_from_structure(
+        self, player: str, structure: str
+    ) -> None:
+        """Update world capabilities when a player discovers a structure."""
+        caps = self.capabilities
+        structure_lower = structure.lower()
+
+        if "fortress" in structure_lower:
+            if not caps.fortress_found:
+                caps.fortress_found = True
+                caps.unlock("fortress", player)
+                # ARCANA: The Tower - order is broken, Hell is mapped
+                caps.cross_threshold(WorldArcana.THE_TOWER, player)
+
+        elif "stronghold" in structure_lower:
+            if not caps.stronghold_found:
+                caps.stronghold_found = True
+                caps.unlock("stronghold", player)
+                # ARCANA: The Hermit - a hidden sacred place revealed
+                caps.cross_threshold(WorldArcana.THE_HERMIT, player)
+
+        elif "bastion" in structure_lower:
+            if not caps.bastion_found:
+                caps.bastion_found = True
+                caps.unlock("bastion", player)
+
+    def _handle_portal_placed(self, player: str, portal_type: str) -> None:
+        """Update capabilities when a portal is placed."""
+        caps = self.capabilities
+
+        if portal_type == "nether":
+            if not caps.nether_portal_placed:
+                caps.nether_portal_placed = True
+                caps.unlock("nether_portal", player)
+
+        elif portal_type == "end":
+            if not caps.end_portal_activated:
+                caps.end_portal_activated = True
+                caps.unlock("end_portal", player)
 
     # ==================== TOOL CALL APPLICATION ====================
 

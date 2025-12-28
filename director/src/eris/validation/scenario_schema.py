@@ -133,6 +133,25 @@ class HealthChangeEvent(BaseModel):
     amount: int = Field(description="Health delta in half-hearts (negative or positive)")
 
 
+class PortalPlacedEvent(BaseModel):
+    """Player places/activates a portal - unlocks dimension access for everyone."""
+
+    type: Literal["portal_placed"] = "portal_placed"
+    player: str = Field(description="Player who placed/activated the portal")
+    portal_type: Literal["nether", "end"] = Field(
+        description="Portal type: 'nether' or 'end'"
+    )
+
+
+class ItemCraftedEvent(BaseModel):
+    """Player crafts an item - may unlock world capabilities."""
+
+    type: Literal["item_crafted"] = "item_crafted"
+    player: str = Field(description="Player who crafted the item")
+    item: str = Field(description="Item ID (e.g., 'diamond_pickaxe', 'eye_of_ender')")
+    count: int = Field(default=1, ge=1, description="Number crafted")
+
+
 # Union of all event types
 Event = (
     AdvancementEvent
@@ -145,6 +164,8 @@ Event = (
     | MobKillEvent
     | StructureDiscoveryEvent
     | HealthChangeEvent
+    | PortalPlacedEvent
+    | ItemCraftedEvent
 )
 
 

@@ -16,7 +16,7 @@ from typing import Any
 from ..config import ErisConfig
 from ..core.database import Database
 from ..core.memory import LongTermMemory, ShortTermMemory
-from ..core.tracing import generate_trace_id
+from ..core.tracing import generate_trace_id, get_root_trace_id, span
 from ..graph.builder import create_graph
 from ..graph.state import ErisMask, EventPriority, create_initial_state
 from .intent_compiler import IntentCompiler
@@ -52,6 +52,7 @@ class ScenarioRunResult:
     graph_outputs: list[dict[str, Any]]  # LangGraph results per event
     duration_seconds: float
     success: bool
+    root_trace_id: str | None = None  # Reference to orchestration trace
     error: str | None = None
 
     def to_dict(self) -> dict[str, Any]:
@@ -59,6 +60,7 @@ class ScenarioRunResult:
         return {
             "scenario_name": self.scenario_name,
             "run_id": self.run_id,
+            "root_trace_id": self.root_trace_id,
             "victory": self.victory,
             "deaths": self.deaths,
             "total_events": self.total_events,
@@ -138,7 +140,13 @@ class ScenarioRunner:
 
         run_id = run_id or str(uuid.uuid4())[:8]
 
-        logger.info(f"[SCENARIO] Starting run: {scenario.metadata.name} (run_id={run_id})")
+        # Get root trace ID from context if running within SimWorldService
+        root_trace_id = get_root_trace_id()
+
+        logger.info(
+            f"[SCENARIO] Starting run: {scenario.metadata.name} "
+            f"(run_id={run_id}, root_trace={root_trace_id or 'none'})"
+        )
 
         try:
             # Create synthetic world from scenario
@@ -300,6 +308,7 @@ class ScenarioRunner:
                 graph_outputs=graph_outputs,
                 duration_seconds=duration,
                 success=True,
+                root_trace_id=root_trace_id,
             )
 
             logger.info(
@@ -329,6 +338,7 @@ class ScenarioRunner:
                 final_phase="unknown",
                 final_fracture=0,
                 world_trace=RunTrace(scenario_name="unknown"),  # Empty trace
+                root_trace_id=root_trace_id,
                 eris_actions=[],
                 graph_outputs=[],
                 duration_seconds=duration,
